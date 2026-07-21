@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Setlist — build a playlist from a feeling</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=Instrument+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#10131c;
+  --panel:#171b27;
+  --panel-2:#1e2331;
+  --haze:#2c3345;
+  --sodium:#e8a34a;
+  --seaglass:#7fd1b9;
+  --mist:#c9cede;
+  --dim:#7c849b;
+  --bad:#e2795f;
+  --r:3px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--ink);
+  color:var(--mist);
+  font-family:'Instrument Sans',system-ui,sans-serif;
+  font-size:15px;line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:var(--seaglass)}
+.wrap{max-width:920px;margin:0 auto;padding:0 20px 96px}
+
+/* ---------- masthead ---------- */
+header.mast{padding:52px 0 30px;border-bottom:1px solid var(--haze)}
+.mast h1{
+  font-family:'Bricolage Grotesque',sans-serif;
+  font-weight:800;font-size:clamp(38px,8vw,68px);
+  letter-spacing:-.035em;line-height:.94;margin:0;color:#fff;
+  font-variation-settings:'opsz' 72;
+}
+.mast h1 em{font-style:normal;color:var(--sodium)}
+.mast p{margin:14px 0 0;max-width:52ch;color:var(--dim)}
+.stamp{
+  font-family:'DM Mono',monospace;font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--dim);margin-bottom:14px;
+}
+
+/* ---------- panels ---------- */
+section.panel{
+  border:1px solid var(--haze);background:var(--panel);
+  border-radius:var(--r);padding:22px;margin-top:22px;
+}
+section.panel > h2{
+  font-family:'DM Mono',monospace;font-size:11px;font-weight:500;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--sodium);
+  margin:0 0 16px;display:flex;align-items:center;gap:10px;
+}
+section.panel > h2::after{content:'';flex:1;height:1px;background:var(--haze)}
+.muted{color:var(--dim);font-size:13px}
+.muted a{color:var(--dim);text-decoration-color:var(--haze)}
+
+/* ---------- controls ---------- */
+label.f{display:block;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:6px}
+input[type=text],input[type=password],textarea{
+  width:100%;background:var(--ink);border:1px solid var(--haze);color:var(--mist);
+  border-radius:var(--r);padding:11px 12px;font-family:inherit;font-size:15px;
+}
+input:focus,textarea:focus,button:focus-visible{outline:2px solid var(--sodium);outline-offset:1px}
+#vibe{font-family:'Bricolage Grotesque',sans-serif;font-size:22px;font-weight:400;padding:16px 14px}
+button{
+  background:var(--panel-2);border:1px solid var(--haze);color:var(--mist);
+  font-family:'Instrument Sans',sans-serif;font-size:14px;font-weight:500;
+  padding:10px 16px;border-radius:var(--r);cursor:pointer;transition:background .12s,border-color .12s;
+}
+button:hover:not(:disabled){background:#262c3d;border-color:#3d465c}
+button:disabled{opacity:.4;cursor:not-allowed}
+button.primary{background:var(--sodium);border-color:var(--sodium);color:#20160a;font-weight:600}
+button.primary:hover:not(:disabled){background:#f2b262;border-color:#f2b262}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.spread{display:flex;gap:24px;flex-wrap:wrap}
+.spread > div{flex:1 1 240px}
+input[type=range]{width:100%;accent-color:var(--sodium);margin:6px 0}
+.rangehead{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+.rangehead b{font-family:'DM Mono',monospace;color:var(--mist);font-weight:500;text-transform:none;letter-spacing:0}
+.ends{display:flex;justify-content:space-between;font-size:11px;color:#5c6478;font-family:'DM Mono',monospace}
+
+/* ---------- progress ---------- */
+.bar{height:3px;background:var(--haze);border-radius:2px;overflow:hidden;margin-top:10px}
+.bar > i{display:block;height:100%;background:var(--seaglass);width:0;transition:width .2s}
+.log{font-family:'DM Mono',monospace;font-size:12px;color:var(--dim);margin-top:8px;min-height:1.4em}
+
+/* ---------- readout: the signature ---------- */
+.readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px 26px;margin-top:4px}
+.gauge{font-family:'DM Mono',monospace;font-size:11px}
+.gauge .lab{display:flex;justify-content:space-between;color:var(--dim);letter-spacing:.08em;text-transform:uppercase}
+.gauge .lab b{color:var(--mist);font-weight:500}
+.track-line{position:relative;height:16px;margin-top:5px;border-bottom:1px solid var(--haze)}
+.track-line .tick{position:absolute;bottom:0;width:1px;height:4px;background:var(--haze)}
+.track-line .needle{
+  position:absolute;bottom:-1px;width:2px;height:16px;background:var(--sodium);
+  transition:left .5s cubic-bezier(.22,1,.36,1);
+}
+.track-line .needle::after{
+  content:'';position:absolute;top:-3px;left:-2px;width:6px;height:6px;
+  background:var(--sodium);border-radius:50%;
+}
+.track-line .band{position:absolute;bottom:0;height:5px;background:rgba(127,209,185,.22);transition:all .5s cubic-bezier(.22,1,.36,1)}
+
+/* ---------- blend ---------- */
+.mix{display:flex;height:26px;border:1px solid var(--haze);border-radius:var(--r);overflow:hidden;margin:14px 0 10px}
+.mix > span{
+  display:flex;align-items:center;padding:0 10px;font-family:'DM Mono',monospace;font-size:11px;
+  color:#20160a;white-space:nowrap;overflow:hidden;transition:width .4s
+}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.chip{
+  font-family:'DM Mono',monospace;font-size:11px;padding:3px 8px;border-radius:2px;
+  border:1px solid var(--haze);color:var(--dim)
+}
+.chip.miss{border-color:rgba(226,121,95,.4);color:var(--bad)}
+
+/* ---------- results ---------- */
+ol.set{list-style:none;margin:0;padding:0;counter-reset:n}
+ol.set li{
+  counter-increment:n;display:grid;grid-template-columns:34px 1fr auto;gap:12px;
+  align-items:baseline;padding:9px 0;border-bottom:1px solid rgba(44,51,69,.6)
+}
+ol.set li::before{
+  content:counter(n,decimal-leading-zero);font-family:'DM Mono',monospace;
+  font-size:11px;color:#5c6478
+}
+ol.set .t{font-weight:500;color:#eef0f6}
+ol.set .a{color:var(--dim);font-size:13px}
+ol.set .m{font-family:'DM Mono',monospace;font-size:10px;color:#5c6478;text-align:right;white-space:nowrap}
+.est{color:var(--sodium)}
+
+.notice{border-left:2px solid var(--sodium);padding:10px 0 10px 14px;margin:14px 0;font-size:13px;color:var(--dim)}
+.notice.err{border-color:var(--bad);color:#e9b3a4}
+code{font-family:'DM Mono',monospace;font-size:13px;background:var(--ink);border:1px solid var(--haze);padding:2px 6px;border-radius:2px;word-break:break-all}
+.hidden{display:none !important}
+details summary{cursor:pointer;font-family:'DM Mono',monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+details[open] summary{margin-bottom:12px}
+@media (prefers-reduced-motion:reduce){*{transition:none !important;animation:none !important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="mast">
+  <div class="stamp">Reads a feeling · returns a running order</div>
+  <h1>Set<em>list</em></h1>
+  <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
+</header>
+
+<!-- SETUP -->
+<section class="panel" id="setupPanel">
+  <h2>Setup</h2>
+  <div id="originWarn" class="notice err hidden"></div>
+  <p class="muted" style="margin-top:0">One-time. Create an app in the Spotify dashboard, register the redirect URI below exactly as written, then paste the Client ID here. Nothing leaves your browser.</p>
+  <p style="margin:14px 0 6px"><span class="muted">Redirect URI to register</span><br><code id="redirUri"></code>
+    <button id="copyRedir" style="padding:4px 10px;font-size:12px;margin-left:6px">Copy</button></p>
+  <p class="muted" style="margin-bottom:18px">Open the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">Spotify developer dashboard</a> → Create app → set Redirect URI → choose <b>Web API</b> → save, then copy the Client ID.</p>
+  <label class="f" for="clientId">Client ID</label>
+  <input type="text" id="clientId" placeholder="32 hex characters" autocomplete="off" spellcheck="false">
+  <div class="row" style="margin-top:14px">
+    <button class="primary" id="connect">Connect Spotify</button>
+    <button id="forget" class="hidden">Sign out</button>
+  </div>
+  <div class="notice" style="margin-bottom:0">Since February 2026, Development Mode apps need the owner to have Spotify Premium, allow one Client ID per developer, and cap you at five authorised users. If login fails with a 403, add your own account under <b>Users and access</b> in the dashboard.</div>
+</section>
+
+<!-- LIBRARY -->
+<section class="panel hidden" id="libPanel">
+  <h2>Library</h2>
+  <div class="row">
+    <button id="syncBtn" class="primary">Load liked songs</button>
+    <button id="refreshBtn" class="hidden">Refresh</button>
+    <button id="featBtn" class="hidden">Read audio features</button>
+    <button id="stopBtn" class="hidden">Stop</button>
+  </div>
+  <div class="bar"><i id="prog"></i></div>
+  <div class="log" id="libLog">Not loaded yet.</div>
+  <details style="margin-top:14px"><summary>Cache</summary>
+    <div class="muted" id="cacheInfo"></div>
+    <div class="row" style="margin-top:10px">
+      <button id="clearFeat">Clear feature cache</button>
+      <button id="clearAll">Clear everything</button>
+    </div>
+  </details>
+</section>
+
+<!-- VIBE -->
+<section class="panel hidden" id="vibePanel">
+  <h2>The vibe</h2>
+  <input type="text" id="vibe" placeholder="hurricane on a beach" autocomplete="off" spellcheck="false">
+  <div class="spread" style="margin-top:22px">
+    <div>
+      <div class="rangehead"><label class="f" for="lenSlider" style="margin:0">Length</label><b id="lenVal">25 tracks</b></div>
+      <input type="range" id="lenSlider" min="5" max="80" step="1" value="25">
+      <div class="ends"><span>5</span><span>80</span></div>
+    </div>
+    <div>
+      <div class="rangehead"><label class="f" for="discSlider" style="margin:0">Familiar ⇄ Discovery</label><b id="discVal">balanced</b></div>
+      <input type="range" id="discSlider" min="0" max="100" step="1" value="50">
+      <div class="ends"><span>the usual</span><span>the edges</span></div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:20px">
+    <button class="primary" id="buildBtn">Build the setlist</button>
+  </div>
+  <div class="log" id="vibeLog"></div>
+</section>
+
+<!-- READING -->
+<section class="panel hidden" id="readPanel">
+  <h2>Reading</h2>
+  <div id="mixWrap"></div>
+  <div class="readout" id="readout"></div>
+  <div class="chips" id="chips"></div>
+</section>
+
+<!-- SET -->
+<section class="panel hidden" id="setPanel">
+  <h2>Running order</h2>
+  <ol class="set" id="setList"></ol>
+  <div class="row" style="margin-top:20px">
+    <input type="text" id="plName" style="flex:1 1 260px;width:auto" placeholder="Playlist name">
+    <button class="primary" id="createBtn">Save to Spotify</button>
+  </div>
+  <div class="log" id="setLog"></div>
+</section>
+
+<p class="muted" style="margin-top:34px;font-size:12px;line-height:1.7">
+Audio features come from <a href="https://reccobeats.com" target="_blank" rel="noopener">ReccoBeats</a>. Spotify's own <code>/v1/audio-features</code> has returned 403 for new apps since 27 Nov 2024 and is never called here. Tracks ReccoBeats doesn't cover are estimated from artist genre and marked <span class="est">est</span>.
+</p>
+
+<script>
+"use strict";
+/* ═══════════════════════════════════════════════════════════════════
+   CONFIG
+   ═══════════════════════════════════════════════════════════════════ */
+const REDIRECT_URI = 'https://dfuzzy69.github.io/setlist/';
+const SCOPES = 'user-library-read playlist-modify-private playlist-modify-public user-top-read';
+const API   = 'https://api.spotify.com/v1';
+const RECCO = 'https://api.reccobeats.com/v1';
+const AUTH  = 'https://accounts.spotify.com/authorize';
+const TOKEN = 'https://accounts.spotify.com/api/token';
+
+const K = { cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', ver:'sl.pkce', st:'sl.state' };
+
+const $ = s => document.querySelector(s);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* ═══════════════════════════════════════════════════════════════════
+   STORAGE
+   ═══════════════════════════════════════════════════════════════════ */
+function load(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } }
+function save(k, v){
+  try{ localStorage.setItem(k, JSON.stringify(v)); return true; }
+  catch(e){ note('Local storage is full. Clear the feature cache and try again.', true); return false; }
+}
+
+let clientId = load(K.cid, '');
+let tokens   = load(K.tok, null);
+let library  = load(K.lib, []);       // [{id,name,artists:[{id,name}],added_at}]
+let features = load(K.feat, {});      // spotifyId -> {t,e,v,d,a,i,s,l,est} | null(=no coverage)
+let genres   = load(K.gen, {});       // artistId -> [genre]
+let topArt   = load(K.top, null);     // {artistId: weight}
+let abort    = false;
+
+/* ═══════════════════════════════════════════════════════════════════
+   PKCE AUTH
+   ═══════════════════════════════════════════════════════════════════ */
+function rand(n){
+  const a = new Uint8Array(n); crypto.getRandomValues(a);
+  return Array.from(a, b => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'[b % 64]).join('');
+}
+function b64url(buf){
+  return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+async function challenge(verifier){
+  return b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+}
+
+async function beginAuth(){
+  if(!clientId) return note('Paste your Client ID first.', true);
+  const verifier = rand(96), state = rand(16);
+  localStorage.setItem(K.ver, verifier);
+  localStorage.setItem(K.st, state);
+  const p = new URLSearchParams({
+    client_id: clientId, response_type: 'code', redirect_uri: REDIRECT_URI,
+    scope: SCOPES, code_challenge_method: 'S256',
+    code_challenge: await challenge(verifier), state
+  });
+  location.href = AUTH + '?' + p;
+}
+
+async function completeAuth(){
+  const q = new URLSearchParams(location.search);
+  const err = q.get('error');
+  if(err){ history.replaceState({},'',REDIRECT_URI); note('Spotify refused the login: ' + err + '. Check the redirect URI and that your account is listed under Users and access.', true); return false; }
+  const code = q.get('code');
+  if(!code) return false;
+  if(q.get('state') !== localStorage.getItem(K.st)){
+    history.replaceState({},'',REDIRECT_URI);
+    note('Login state did not match. Start again.', true); return false;
+  }
+  const verifier = localStorage.getItem(K.ver);
+  history.replaceState({},'',REDIRECT_URI);
+  const r = await fetch(TOKEN, {
+    method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body: new URLSearchParams({
+      client_id: clientId, grant_type:'authorization_code', code,
+      redirect_uri: REDIRECT_URI, code_verifier: verifier
+    })
+  });
+  const j = await r.json();
+  if(!r.ok){ note('Token exchange failed: ' + (j.error_description || j.error || r.status), true); return false; }
+  storeTokens(j);
+  localStorage.removeItem(K.ver); localStorage.removeItem(K.st);
+  return true;
+}
+
+function storeTokens(j){
+  tokens = {
+    access: j.access_token,
+    refresh: j.refresh_token || (tokens && tokens.refresh),
+    exp: Date.now() + (j.expires_in - 60) * 1000
+  };
+  save(K.tok, tokens);
+}
+
+async function refresh(){
+  if(!tokens || !tokens.refresh) throw new Error('no refresh token');
+  const r = await fetch(TOKEN, {
+    method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body: new URLSearchParams({ client_id: clientId, grant_type:'refresh_token', refresh_token: tokens.refresh })
+  });
+  const j = await r.json();
+  if(!r.ok){ tokens = null; localStorage.removeItem(K.tok); throw new Error('session expired'); }
+  storeTokens(j);
+}
+
+async function sp(path, opts = {}, retry = true){
+  if(!tokens) throw new Error('not signed in');
+  if(Date.now() > tokens.exp) await refresh();
+  const r = await fetch(API + path, {
+    ...opts,
+    headers: { Authorization: 'Bearer ' + tokens.access, 'Content-Type':'application/json', ...(opts.headers||{}) }
+  });
+  if(r.status === 401 && retry){ await refresh(); return sp(path, opts, false); }
+  if(r.status === 429){
+    const wait = (parseInt(r.headers.get('Retry-After') || '2', 10) + 1) * 1000;
+    await sleep(wait); return sp(path, opts, retry);
+  }
+  if(!r.ok){
+    let d = ''; try{ d = (await r.json()).error?.message || ''; }catch(e){}
+    throw new Error('Spotify ' + r.status + (d ? ': ' + d : ''));
+  }
+  return r.status === 204 ? null : r.json();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   LIBRARY  —  GET /me/tracks (still available post-Feb-2026)
+   ═══════════════════════════════════════════════════════════════════ */
+function slim(item){
+  const t = item.track;
+  if(!t || !t.id || t.is_local) return null;
+  return { id:t.id, name:t.name, added_at:item.added_at,
+           artists:(t.artists||[]).map(a => ({id:a.id, name:a.name})) };
+}
+
+async function syncLibrary(incremental){
+  abort = false; busy(true);
+  const known = new Set(library.map(t => t.id));
+  const fresh = [];
+  let url = '/me/tracks?limit=50&offset=0', total = null, seen = 0, hit = false;
+
+  while(url && !abort && !hit){
+    const page = await sp(url);
+    total = page.total;
+    for(const it of page.items){
+      const s = slim(it); if(!s) continue;
+      if(incremental && known.has(s.id)){ hit = true; break; }
+      fresh.push(s);
+    }
+    seen += page.items.length;
+    progress(incremental ? Math.min(1, fresh.length / 50) : seen / Math.max(total,1));
+    libLog(incremental ? `Checking for new saves… ${fresh.length} new` : `Reading liked songs… ${seen} of ${total}`);
+    url = page.next ? page.next.replace(API, '') : null;
+    await sleep(60);
+  }
+
+  if(incremental){
+    library = fresh.concat(library);
+    libLog(`${fresh.length} new track${fresh.length===1?'':'s'} added. ${library.length} total.`);
+  }else{
+    library = fresh;
+    libLog(`${library.length} liked song${library.length===1?'':'s'} loaded.`);
+  }
+  save(K.lib, library);
+  progress(0); busy(false); paint();
+}
+
+async function loadTop(){
+  if(topArt) return;
+  const map = {};
+  try{
+    for(const range of ['short_term','medium_term','long_term']){
+      const r = await sp(`/me/top/artists?limit=50&time_range=${range}`);
+      (r.items||[]).forEach((a, i) => {
+        map[a.id] = Math.max(map[a.id] || 0, 1 - i / 50);
+      });
+      await sleep(80);
+    }
+  }catch(e){ /* user-top-read may be declined; library counts still work */ }
+  topArt = map; save(K.top, topArt);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   AUDIO FEATURES  —  ReccoBeats, batched
+   ═══════════════════════════════════════════════════════════════════ */
+const RB_BATCH = 20, RB_GAP = 260;
+
+function normFeat(o){
+  const num = x => (typeof x === 'number' && isFinite(x)) ? x : null;
+  const cl = (x,lo,hi) => Math.max(0, Math.min(1, (x - lo) / (hi - lo)));
+  const tempo = num(o.tempo);
+  const f = {
+    t: tempo === null ? null : cl(tempo, 60, 180),
+    e: num(o.energy), v: num(o.valence), d: num(o.danceability),
+    a: num(o.acousticness), i: num(o.instrumentalness),
+    s: num(o.speechiness), l: num(o.liveness),
+    bpm: tempo
+  };
+  return (f.e === null && f.v === null && f.d === null) ? null : f;
+}
+
+async function rb(ids){
+  const url = `${RECCO}/audio-features?ids=${ids.join(',')}`;
+  for(let attempt = 0; attempt < 3; attempt++){
+    let r;
+    try{ r = await fetch(url); }
+    catch(e){ await sleep(900 * (attempt+1)); continue; }
+    if(r.status === 429){ await sleep(2500 * (attempt+1)); continue; }
+    if(!r.ok) return [];
+    const j = await r.json().catch(() => null);
+    if(!j) return [];
+    return Array.isArray(j.content) ? j.content : (Array.isArray(j) ? j : []);
+  }
+  return [];
+}
+
+async function fetchFeatures(){
+  abort = false; busy(true);
+  const todo = library.map(t => t.id).filter(id => !(id in features));
+  if(!todo.length){ libLog('Every track already has a reading.'); busy(false); return paint(); }
+
+  let done = 0, got = 0;
+  for(let i = 0; i < todo.length && !abort; i += RB_BATCH){
+    const chunk = todo.slice(i, i + RB_BATCH);
+    const rows = await rb(chunk);
+    const pending = new Set(chunk);
+
+    for(const row of rows){
+      const href = row.href || row.trackHref || '';
+      const m = /([A-Za-z0-9]{22})/.exec(href.split('/').pop() || '');
+      let id = m ? m[1] : null;
+      if(!id && rows.length === 1 && chunk.length === 1) id = chunk[0];
+      if(!id || !pending.has(id)) continue;
+      const f = normFeat(row);
+      features[id] = f; pending.delete(id);
+      if(f) got++;
+    }
+    pending.forEach(id => { features[id] = null; });   // no coverage — remember, don't re-ask
+
+    done += chunk.length;
+    progress(done / todo.length);
+    libLog(`Reading features… ${done} of ${todo.length} · ${got} covered`);
+    if(done % 200 < RB_BATCH) save(K.feat, features);
+    await sleep(RB_GAP);
+  }
+  save(K.feat, features);
+
+  const missing = library.filter(t => features[t.id] === null);
+  progress(0);
+  if(missing.length && !abort){
+    libLog(`${got} tracks read. ${missing.length} not covered — estimating those from artist genre.`);
+    await genreFallback(missing);
+  }
+  busy(false); paint();
+}
+
+/* Genre fallback. GET /artists?ids= was REMOVED in Feb 2026, so this is
+   one request per artist — cached hard, throttled, and stoppable. */
+async function genreFallback(missing){
+  const need = [...new Set(missing.flatMap(t => t.artists.map(a => a.id)).filter(id => id && !(id in genres)))];
+  let n = 0;
+  for(const id of need){
+    if(abort) break;
+    try{ const a = await sp('/artists/' + id); genres[id] = a.genres || []; }
+    catch(e){ genres[id] = []; }
+    n++;
+    progress(n / Math.max(need.length, 1));
+    libLog(`Looking up artist genres… ${n} of ${need.length}`);
+    if(n % 40 === 0) save(K.gen, genres);
+    await sleep(110);
+  }
+  save(K.gen, genres);
+  let est = 0;
+  for(const t of missing){
+    const gs = t.artists.flatMap(a => genres[a.id] || []);
+    const f = fromGenres(gs);
+    if(f){ features[t.id] = f; est++; }
+  }
+  save(K.feat, features);
+  progress(0);
+  libLog(`${est} track${est===1?'':'s'} estimated from genre. Ready.`);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   LEXICON
+   Compact DSL:  "pos t.. e.. v.. d.. a.. i.. s.. l.."
+   t tempo · e energy · v valence · d danceability
+   a acousticness · i instrumentalness · s speechiness · l liveness
+   pos: n = noun (leads a segment) · a = modifier
+   ═══════════════════════════════════════════════════════════════════ */
+const RAW = {
+/* weather & sky */
+'hurricane|cyclone|typhoon':      'n t.78 e.96 v.20 d.40 a.05 i.35 l.55',
+'storm|stormy|thunderstorm':      'n t.70 e.90 v.25 d.42 a.12 i.35 l.45',
+'thunder|lightning':              'n t.68 e.92 v.30 d.45 a.10 i.30',
+'rain|rainy|drizzle|downpour':    'n t.38 e.32 v.32 d.38 a.62 i.45',
+'fog|foggy|mist|misty|haze|hazy': 'a t.30 e.24 v.34 d.30 a.60 i.55',
+'snow|snowy|blizzard|frost':      'n t.30 e.28 v.38 d.28 a.66 i.55',
+'sun|sunny|sunshine|sunlight':    'a t.58 e.68 v.86 d.66 a.35',
+'wind|windy|breeze|breezy':       'a t.48 e.45 v.55 d.45 a.55 i.40',
+'heat|heatwave|humid|sweltering': 'a t.52 e.62 v.50 d.62 a.30',
+'cold|freezing|chill|chilly':     'a t.36 e.30 v.32 d.32 a.55 i.50',
+'clear|crisp|bright':             'a t.55 e.60 v.75 d.55 a.40',
+'grey|gray|overcast|gloom':       'a t.35 e.30 v.24 d.32 a.55 i.45',
+/* time */
+'dawn|sunrise|daybreak':          'n t.42 e.38 v.62 d.40 a.62 i.45',
+'morning|am':                     'n t.48 e.48 v.70 d.50 a.55',
+'noon|midday|afternoon':          'n t.55 e.58 v.68 d.58 a.42',
+'dusk|twilight|sunset|golden':    'n t.38 e.34 v.48 d.42 a.58 i.42',
+'evening|nightfall':              'n t.44 e.42 v.50 d.48 a.48',
+'night|nighttime|nocturnal':      'n t.48 e.48 v.38 d.58 a.30 i.35',
+'midnight':                       'n t.45 e.45 v.30 d.55 a.32 i.40',
+'2am|3am|4am|latenight':          'n t.32 e.26 v.18 d.40 a.52 i.45',
+'weekend|saturday':               'n t.62 e.72 v.78 d.72 a.20',
+'sunday':                         'n t.38 e.34 v.52 d.42 a.66 i.35',
+'monday':                         'n t.45 e.42 v.30 d.42 a.40',
+'friday':                         'n t.68 e.80 v.80 d.78 a.15',
+'summer':                         'n t.60 e.68 v.82 d.70 a.30',
+'winter':                         'n t.34 e.30 v.32 d.32 a.62 i.52',
+'autumn|fall':                    'n t.42 e.38 v.42 d.40 a.62 i.42',
+'spring':                         'n t.52 e.52 v.74 d.55 a.55',
+/* places */
+'beach|shore|coast|seaside':      'n t.52 e.48 v.80 d.66 a.52 i.22',
+'ocean|sea|tide|wave':            'n t.42 e.42 v.55 d.40 a.55 i.55',
+'underwater|submerged|deep':      'n t.30 e.28 v.35 d.32 a.45 i.75',
+'river|lake|creek|stream':        'n t.40 e.36 v.58 d.40 a.72 i.50',
+'desert|dune|dust':               'n t.42 e.42 v.38 d.42 a.62 i.48',
+'forest|woods|woodland|pine':     'n t.36 e.32 v.48 d.32 a.78 i.60',
+'mountain|peak|summit|alpine':    'n t.45 e.55 v.55 d.35 a.65 i.55',
+'field|meadow|prairie|pasture':   'n t.42 e.40 v.68 d.42 a.75 i.40',
+'garden|greenhouse|orchard':      'n t.40 e.36 v.72 d.42 a.75 i.45',
+'city|downtown|street|urban':     'n t.62 e.72 v.55 d.72 a.15 s.30',
+'subway|metro|train|tram':        'n t.58 e.60 v.42 d.60 a.25 i.40',
+'highway|freeway|road|interstate':'n t.66 e.75 v.60 d.55 a.18 i.30',
+'airport|terminal|departure':     'n t.45 e.42 v.42 d.45 a.40 i.50',
+'club|nightclub|discotheque':     'n t.74 e.88 v.66 d.90 a.04 i.55',
+'rave|warehouse':                 'n t.85 e.94 v.55 d.88 a.02 i.75',
+'bar|pub|tavern|dive':            'n t.55 e.62 v.60 d.60 a.35 l.35',
+'diner|motel|roadside':           'n t.48 e.45 v.48 d.48 a.55',
+'church|chapel|cathedral':        'n t.35 e.42 v.55 d.25 a.62 i.45',
+'library|study|desk':             'n t.36 e.24 v.48 d.28 a.62 i.82',
+'kitchen|cooking|dinner':         'n t.50 e.50 v.72 d.58 a.50',
+'bedroom|bed':                    'n t.36 e.30 v.45 d.45 a.55',
+'shower|bathroom':                'n t.42 e.38 v.42 d.48 a.50',
+'attic|basement|cellar':          'n t.38 e.35 v.28 d.32 a.55 i.55',
+'cabin|campfire|tent|camp':       'n t.38 e.34 v.58 d.35 a.82 i.35',
+'arcade|mall|neon':               'n t.68 e.75 v.70 d.72 a.08 i.60',
+'elevator|lobby|waiting':         'n t.42 e.28 v.52 d.45 a.45 i.80',
+'hospital|clinic|ward':           'n t.35 e.30 v.22 d.28 a.50 i.55',
+'prison|cell|cage':               'n t.42 e.55 v.18 d.35 a.35 i.35',
+'museum|gallery':                 'n t.38 e.30 v.50 d.30 a.60 i.72',
+'space|cosmos|cosmic|orbit|void': 'n t.38 e.42 v.45 d.32 a.20 i.85',
+'stadium|festival|crowd|arena':   'n t.68 e.88 v.78 d.70 a.10 l.75',
+/* moments */
+'picnic|brunch|lunch':            'n t.48 e.44 v.86 d.58 a.70',
+'party|celebration|bash':         'n t.72 e.88 v.85 d.88 a.06',
+'wedding|anniversary':            'n t.58 e.62 v.85 d.70 a.40',
+'birthday':                       'n t.65 e.78 v.88 d.78 a.25',
+'funeral|wake|mourning|grief':    'n t.28 e.22 v.08 d.22 a.70 i.55',
+'breakup|heartbreak|heartbroken': 'n t.38 e.38 v.12 d.35 a.55 i.20',
+'reunion|homecoming':             'n t.52 e.58 v.78 d.55 a.45',
+'goodbye|farewell|leaving':       'n t.38 e.35 v.25 d.35 a.60 i.35',
+'roadtrip|drive|driving|cruise':  'n t.62 e.72 v.68 d.58 a.22 i.30',
+'commute|traffic':                'n t.52 e.50 v.42 d.52 a.32',
+'workout|gym|lifting|training':   'n t.82 e.94 v.62 d.75 a.03 s.25',
+'run|running|jog|sprint':         'n t.85 e.92 v.68 d.72 a.05',
+'walk|walking|stroll|wander':     'n t.45 e.40 v.60 d.48 a.58',
+'cycling|biking|ride':            'n t.68 e.75 v.70 d.62 a.20',
+'swim|swimming|float|floating':   'n t.38 e.35 v.55 d.38 a.45 i.65',
+'flying|flight|soaring':          'n t.55 e.62 v.62 d.40 a.30 i.65',
+'falling|freefall|plunge':        'n t.55 e.70 v.28 d.40 a.25 i.55',
+'sleep|sleeping|nap|dozing':      'n t.26 e.14 v.45 d.22 a.72 i.88',
+'dream|dreaming|dreamy|reverie':  'n t.34 e.28 v.52 d.35 a.50 i.72',
+'insomnia|sleepless|awake':       'n t.38 e.32 v.22 d.35 a.42 i.60',
+'meditation|meditate|yoga|breath':'n t.28 e.16 v.58 d.22 a.72 i.92',
+'focus|concentration|deepwork':   'n t.48 e.35 v.50 d.35 a.45 i.90',
+'coding|writing|working|work':    'n t.52 e.42 v.52 d.42 a.35 i.85',
+'cleaning|chores|laundry|dishes': 'n t.60 e.68 v.75 d.72 a.25',
+'packing|moving|unpacking':       'n t.52 e.55 v.48 d.50 a.40',
+'reading|book':                   'n t.36 e.24 v.52 d.28 a.68 i.85',
+/* feelings */
+'sad|sadness|sorrow|blue|down':   'a t.34 e.26 v.10 d.32 a.62 i.35',
+'crying|weeping|tears|sobbing':   'n t.28 e.22 v.06 d.25 a.70 i.30',
+'happy|happiness|joy|joyful':     'a t.62 e.72 v.92 d.72 a.30',
+'angry|anger|rage|furious|fury':  'n t.72 e.96 v.15 d.50 a.03 s.30',
+'calm|calming|serene|still|quiet':'a t.32 e.20 v.58 d.30 a.70 i.70',
+'peace|peaceful|tranquil':        'n t.30 e.20 v.65 d.28 a.72 i.68',
+'anxious|anxiety|panic|dread':    'n t.62 e.68 v.15 d.42 a.30 i.55',
+'lonely|loneliness|alone|solitude':'a t.34 e.26 v.18 d.30 a.66 i.55',
+'nostalgia|nostalgic|memory|remember':'n t.44 e.40 v.42 d.45 a.55 i.35',
+'longing|yearning|ache|wistful':  'n t.38 e.35 v.28 d.35 a.58 i.45',
+'love|romance|romantic|intimate': 'n t.45 e.45 v.72 d.55 a.50 i.20',
+'sexy|sensual|seduction|sultry':  'a t.48 e.55 v.62 d.80 a.25 i.25',
+'tender|gentle|soft|delicate':    'a t.36 e.26 v.62 d.38 a.72 i.45',
+'hopeful|hope|uplifting':         'a t.55 e.62 v.80 d.55 a.40',
+'triumphant|victory|glory|winning':'a t.65 e.88 v.82 d.55 a.15 l.40',
+'defiant|rebellion|riot|protest': 'n t.72 e.92 v.42 d.55 a.05 l.45',
+'confident|swagger|cocky|bold':   'a t.62 e.78 v.72 d.85 a.08 s.28',
+'menacing|sinister|ominous|dread':'a t.52 e.70 v.10 d.42 a.15 i.60',
+'creepy|haunted|eerie|uncanny':   'a t.38 e.42 v.12 d.30 a.40 i.72',
+'ghost|spectral|phantom':         'n t.34 e.32 v.20 d.28 a.48 i.70',
+'chaos|chaotic|frenzy|mania':     'n t.80 e.94 v.42 d.55 a.05 l.45',
+'apocalypse|doom|end|ruin|decay': 'n t.45 e.72 v.10 d.35 a.20 i.55',
+'war|battle|combat|siege':        'n t.68 e.92 v.20 d.42 a.08 i.45',
+'revenge|vengeance|spite':        'n t.62 e.85 v.22 d.60 a.08 s.28',
+'bittersweet|melancholy|wistful': 'a t.40 e.35 v.28 d.40 a.60 i.40',
+'euphoria|euphoric|ecstatic|bliss':'n t.78 e.92 v.90 d.82 a.05 i.45',
+'restless|antsy|itchy':           'a t.66 e.72 v.40 d.60 a.20',
+'drunk|drinking|whiskey|wine|beer':'n t.52 e.58 v.55 d.58 a.42 l.35',
+'hungover|hangover':              'n t.34 e.24 v.24 d.32 a.55 i.45',
+'high|stoned|weed|smoke|smoky':   'a t.42 e.38 v.55 d.62 a.35 i.55',
+'psychedelic|trippy|kaleidoscope':'a t.52 e.62 v.55 d.50 a.25 i.70',
+'hypnotic|trance|looping':        'a t.68 e.70 v.45 d.78 a.10 i.85',
+'lush|velvet|plush|opulent':      'a t.42 e.45 v.62 d.50 a.45 i.50',
+'raw|gritty|dirty|grimy|rough':   'a t.62 e.85 v.35 d.55 a.10 l.45',
+'clean|polished|glossy|crystal':  'a t.55 e.55 v.68 d.62 a.30 i.40',
+'sparse|minimal|empty|bare':      'a t.38 e.24 v.42 d.32 a.55 i.78',
+'dense|heavy|thick|massive':      'a t.60 e.90 v.32 d.45 a.05 i.45',
+'slow|sluggish|languid|lazy':     'a t.24 e.28 v.48 d.38 a.55',
+'fast|quick|rapid|speeding':      'a t.88 e.85 v.60 d.70 a.10',
+'loud|blaring|roaring':           'a t.68 e.94 v.50 d.58 a.05 l.45',
+'soft|hushed|whisper|whispered':  'a t.32 e.18 v.50 d.32 a.72 i.55',
+'young|teenage|adolescent':       'a t.68 e.82 v.68 d.68 a.12',
+'childhood|children|nursery':     'n t.52 e.50 v.82 d.55 a.55 i.40',
+'ancient|old|vintage|antique':    'a t.42 e.40 v.48 d.42 a.68 i.45',
+'futuristic|robot|machine|android':'a t.62 e.72 v.42 d.72 a.05 i.82',
+'factory|industrial|steel|iron':  'n t.62 e.85 v.28 d.55 a.03 i.65',
+'gold|golden|glitter|shimmer':    'a t.52 e.58 v.78 d.62 a.35 i.40',
+'rust|rusted|worn|faded':         'a t.40 e.42 v.32 d.40 a.62 i.40',
+'fire|burning|ember|flame':       'n t.62 e.85 v.45 d.55 a.20 i.35',
+'ice|icy|glacier|frozen':         'n t.34 e.32 v.32 d.30 a.50 i.70',
+'moon|moonlight|lunar':           'n t.36 e.32 v.45 d.38 a.55 i.55',
+'star|stars|starlight|starry':    'n t.40 e.38 v.62 d.40 a.50 i.60',
+'shadow|dark|darkness|black':     'a t.44 e.52 v.15 d.42 a.30 i.55',
+'light|glow|glowing|luminous':    'a t.48 e.48 v.72 d.48 a.45 i.50',
+'ritual|ceremony|incantation':    'n t.45 e.55 v.35 d.42 a.40 i.75',
+'gospel|hymn|choir|sacred':       'n t.48 e.60 v.72 d.42 a.50 l.45',
+'carnival|parade|marching':       'n t.70 e.82 v.80 d.72 a.25 l.55',
+'karaoke|singalong|anthem':       'n t.62 e.82 v.80 d.62 a.20 l.50'
+};
+
+const DIMS = ['t','e','v','d','a','i','s','l'];
+const DIM_NAME = { t:'tempo', e:'energy', v:'brightness', d:'groove', a:'acoustic', i:'wordless', s:'spoken', l:'live air' };
+
+const LEX = {};
+for(const keys in RAW){
+  const parts = RAW[keys].trim().split(/\s+/);
+  const pos = parts[0], vec = {};
+  for(let i = 1; i < parts.length; i++){
+    const m = /^([tevdaisl])(-?[\d.]+)$/.exec(parts[i]);
+    if(m) vec[m[1]] = parseFloat(m[2]);
+  }
+  keys.split('|').forEach(w => { LEX[w] = { pos, vec, label: keys.split('|')[0] }; });
+}
+
+/* genre keyword → sonic centre, for tracks ReccoBeats doesn't cover */
+const GENRE = {
+  'ambient':'t.30 e.15 v.45 d.25 a.55 i.92', 'drone':'t.25 e.20 v.30 d.20 a.45 i.95',
+  'classical':'t.42 e.30 v.50 d.25 a.85 i.92', 'opera':'t.45 e.50 v.50 d.25 a.80 i.30',
+  'choral':'t.40 e.42 v.60 d.22 a.78 i.40', 'soundtrack':'t.42 e.45 v.45 d.30 a.55 i.80',
+  'jazz':'t.52 e.45 v.55 d.55 a.62 i.60', 'bossa':'t.48 e.35 v.65 d.62 a.72 i.35',
+  'blues':'t.48 e.55 v.35 d.52 a.55 i.25', 'soul':'t.52 e.62 v.65 d.68 a.35 i.10',
+  'funk':'t.62 e.78 v.78 d.88 a.15 i.25', 'disco':'t.70 e.82 v.82 d.88 a.10 i.25',
+  'gospel':'t.50 e.68 v.78 d.50 a.45 i.15', 'r&b':'t.48 e.55 v.55 d.75 a.28 i.10',
+  'hip hop':'t.62 e.70 v.50 d.80 a.10 i.05 s.30', 'rap':'t.62 e.72 v.48 d.78 a.08 i.03 s.35',
+  'trap':'t.68 e.72 v.42 d.82 a.06 i.05 s.28', 'grime':'t.72 e.85 v.40 d.78 a.05 s.35',
+  'house':'t.72 e.80 v.62 d.88 a.05 i.60', 'techno':'t.80 e.88 v.42 d.85 a.03 i.82',
+  'trance':'t.82 e.85 v.60 d.78 a.04 i.75', 'edm':'t.75 e.88 v.68 d.85 a.05 i.45',
+  'dubstep':'t.72 e.92 v.42 d.72 a.03 i.55', 'drum and bass':'t.92 e.92 v.50 d.80 a.03 i.60',
+  'garage':'t.72 e.78 v.62 d.85 a.06 i.45', 'synthwave':'t.62 e.72 v.55 d.70 a.06 i.75',
+  'lo-fi':'t.42 e.32 v.50 d.62 a.45 i.75', 'chill':'t.42 e.32 v.55 d.55 a.45 i.60',
+  'downtempo':'t.38 e.35 v.48 d.55 a.40 i.70', 'trip hop':'t.45 e.45 v.35 d.62 a.35 i.55',
+  'rock':'t.62 e.80 v.50 d.48 a.12 i.15', 'indie':'t.55 e.62 v.52 d.50 a.30 i.20',
+  'punk':'t.80 e.92 v.50 d.48 a.05 i.10', 'hardcore':'t.85 e.96 v.30 d.42 a.03 i.10',
+  'metal':'t.72 e.95 v.28 d.38 a.03 i.20', 'doom':'t.35 e.85 v.15 d.30 a.05 i.35',
+  'emo':'t.62 e.78 v.28 d.42 a.15 i.08', 'screamo':'t.78 e.95 v.20 d.38 a.04 i.08',
+  'shoegaze':'t.55 e.72 v.38 d.40 a.15 i.45', 'post-rock':'t.48 e.62 v.42 d.30 a.30 i.85',
+  'prog':'t.55 e.70 v.45 d.35 a.25 i.55', 'math rock':'t.65 e.75 v.50 d.42 a.20 i.55',
+  'psych':'t.52 e.62 v.52 d.48 a.28 i.45', 'garage rock':'t.68 e.85 v.55 d.52 a.08 i.12',
+  'folk':'t.42 e.35 v.52 d.42 a.82 i.20', 'acoustic':'t.42 e.30 v.55 d.42 a.90 i.25',
+  'singer-songwriter':'t.45 e.35 v.45 d.42 a.75 i.10', 'americana':'t.48 e.45 v.50 d.45 a.70 i.15',
+  'country':'t.52 e.55 v.58 d.55 a.55 i.08', 'bluegrass':'t.62 e.62 v.65 d.50 a.85 i.35',
+  'pop':'t.60 e.70 v.70 d.70 a.20 i.05', 'k-pop':'t.68 e.82 v.75 d.75 a.10 i.05',
+  'reggae':'t.48 e.58 v.72 d.78 a.25 i.15', 'dub':'t.45 e.55 v.55 d.75 a.20 i.65',
+  'ska':'t.75 e.82 v.82 d.72 a.15 i.15', 'latin':'t.65 e.75 v.78 d.82 a.25 i.08',
+  'salsa':'t.72 e.80 v.80 d.85 a.30 i.10', 'samba':'t.68 e.72 v.82 d.82 a.40 i.12',
+  'afrobeat':'t.62 e.72 v.75 d.82 a.25 i.15', 'amapiano':'t.62 e.65 v.68 d.85 a.10 i.45',
+  'world':'t.52 e.55 v.62 d.60 a.55 i.35', 'new age':'t.30 e.18 v.60 d.25 a.65 i.90',
+  'experimental':'t.48 e.52 v.35 d.35 a.35 i.72', 'noise':'t.55 e.95 v.20 d.30 a.05 i.75',
+  'video game':'t.62 e.68 v.62 d.55 a.10 i.85', 'jungle':'t.90 e.88 v.55 d.82 a.04 i.55'
+};
+const GENRE_VEC = {};
+for(const g in GENRE){
+  const v = {};
+  GENRE[g].split(/\s+/).forEach(p => { const m = /^([tevdaisl])([\d.]+)$/.exec(p); if(m) v[m[1]] = parseFloat(m[2]); });
+  GENRE_VEC[g] = v;
+}
+function fromGenres(list){
+  const hits = [];
+  for(const g of list){
+    const lg = g.toLowerCase();
+    for(const key in GENRE_VEC) if(lg.includes(key)) hits.push(GENRE_VEC[key]);
+  }
+  if(!hits.length) return null;
+  const out = { est:true, bpm:null };
+  for(const d of DIMS){
+    const vals = hits.map(h => h[d]).filter(x => typeof x === 'number');
+    out[d] = vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
+  }
+  return out;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   PARSING THE VIBE
+   ═══════════════════════════════════════════════════════════════════ */
+const PREPS = new Set(['on','in','at','by','under','over','during','with','near','through','after','before','inside','beneath','against','into','from','beside','among','across','below','above','around','toward','towards','while','amid','atop']);
+const STOP  = new Set(['a','an','the','of','and','or','but','to','for','is','it','my','me','i','you','we','they','this','that','some','very','really','just','like','as','be','was','were','so','then','than','there','their','its','his','her']);
+const SUFFIX = ['iness','ingly','edly','ness','ings','ing','ies','ied','est','ers','er','ed','es','ly','s','y'];
+
+function stem(w){
+  if(LEX[w]) return w;
+  for(const s of SUFFIX){
+    if(w.length > s.length + 2 && w.endsWith(s)){
+      const base = w.slice(0, -s.length);
+      if(LEX[base]) return base;
+      if(LEX[base + 'e']) return base + 'e';
+      if(base.length > 3 && base[base.length-1] === base[base.length-2] && LEX[base.slice(0,-1)]) return base.slice(0,-1);
+    }
+  }
+  if(w.endsWith('i') && LEX[w.slice(0,-1) + 'y']) return w.slice(0,-1) + 'y';
+  return null;
+}
+function bigrams(s){ const o = new Set(); for(let i=0;i<s.length-1;i++) o.add(s.slice(i,i+2)); return o; }
+function dice(a, b){
+  const A = bigrams(a), B = bigrams(b);
+  if(!A.size || !B.size) return 0;
+  let n = 0; A.forEach(x => { if(B.has(x)) n++; });
+  return 2 * n / (A.size + B.size);
+}
+function lev(a, b){
+  if(a === b) return 0;
+  let prev = Array.from({length:b.length+1}, (_,i) => i);
+  for(let i = 1; i <= a.length; i++){
+    const cur = [i];
+    for(let j = 1; j <= b.length; j++){
+      cur[j] = Math.min(prev[j]+1, cur[j-1]+1, prev[j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+/* Dice alone ranks short prefixes above transposed typos ("workuot" → "work"),
+   edit distance alone is loose on long words. Blend them. */
+function fuzzy(w){
+  if(w.length < 4) return null;
+  let best = null, score = 0;
+  for(const k in LEX){
+    if(Math.abs(k.length - w.length) > 4) continue;
+    const s = 0.45 * dice(w, k) + 0.55 * (1 - lev(w, k) / Math.max(w.length, k.length));
+    if(s > score){ score = s; best = k; }
+  }
+  return score >= 0.58 ? best : null;
+}
+function lookup(w){
+  if(LEX[w]) return { key:w, how:'exact' };
+  const st = stem(w);
+  if(st) return { key:st, how:'stem' };
+  const fz = fuzzy(w);
+  if(fz) return { key:fz, how:'fuzzy' };
+  return null;
+}
+
+/* Segments split on prepositions. Head segment leads at 80%; everything
+   after a preposition shares the remaining 20%. */
+function parseVibe(text){
+  const words = text.toLowerCase().replace(/[^a-z0-9\s']/g,' ').split(/\s+/).filter(Boolean);
+  const segs = [[]]; const unknown = []; const matched = [];
+  for(const w of words){
+    if(PREPS.has(w)){ if(segs[segs.length-1].length) segs.push([]); continue; }
+    if(STOP.has(w)) continue;
+    const hit = lookup(w);
+    if(!hit){ unknown.push(w); continue; }
+    matched.push({ word:w, ...hit });
+    segs[segs.length-1].push({ word:w, ...LEX[hit.key], key:hit.key });
+  }
+  const live = segs.filter(s => s.length);
+  if(!live.length) return { concepts:[], unknown, matched };
+
+  const concepts = live.map(seg => {
+    // within a segment, nouns anchor and modifiers colour
+    const vec = {}, wts = {};
+    let lastNoun = -1;
+    seg.forEach((e, i) => { if(e.pos === 'n') lastNoun = i; });
+    seg.forEach((e, i) => {
+      const w = e.pos === 'n' ? (i === lastNoun ? 1.0 : 0.75) : 0.6;
+      for(const d in e.vec){ vec[d] = (vec[d]||0) + e.vec[d]*w; wts[d] = (wts[d]||0) + w; }
+    });
+    for(const d in vec) vec[d] /= wts[d];
+    return { vec, label: seg.map(e => e.word).join(' '), terms: seg.map(e => e.key) };
+  });
+
+  if(concepts.length === 1){ concepts[0].weight = 1; }
+  else{
+    concepts[0].weight = 0.8;
+    const share = 0.2 / (concepts.length - 1);
+    for(let i = 1; i < concepts.length; i++) concepts[i].weight = share;
+  }
+  return { concepts, unknown, matched };
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SCORING
+   ═══════════════════════════════════════════════════════════════════ */
+function familiarity(track){
+  let f = 0;
+  for(const a of track.artists){
+    if(topArt && topArt[a.id]) f = Math.max(f, topArt[a.id]);
+    const c = artistCount[a.id] || 0;
+    f = Math.max(f, Math.min(1, c / 12) * 0.7);
+  }
+  return f;
+}
+let artistCount = {};
+function recount(){
+  artistCount = {};
+  for(const t of library) for(const a of t.artists) artistCount[a.id] = (artistCount[a.id]||0) + 1;
+}
+
+function fit(vec, f){
+  let sum = 0, wt = 0;
+  for(const d in vec){
+    if(f[d] === null || f[d] === undefined) continue;
+    const w = (d === 't' || d === 'e' || d === 'v') ? 1.35 : 1.0;   // the dimensions people actually hear
+    const diff = vec[d] - f[d];
+    sum += w * diff * diff; wt += w;
+  }
+  if(!wt) return 0;
+  const rms = Math.sqrt(sum / wt);
+  return Math.max(0, 1 - rms * 1.45);
+}
+
+function rankFor(concept, pool, disc){
+  const bias = (disc - 0.5) * 2;     // -1 familiar … +1 discovery
+  return pool.map(t => {
+    const base = fit(concept.vec, t.f);
+    const fam = familiarity(t);
+    return { t, s: base - bias * fam * 0.30 + (t.f.est ? -0.04 : 0) };
+  }).sort((a,b) => b.s - a.s);
+}
+
+/* Weight-proportional interleave: never averages two concepts together,
+   it alternates between their own ranked lists. */
+function interleave(ranked, weights, n, maxPerArtist = 2){
+  const idx = ranked.map(() => 0), taken = ranked.map(() => 0);
+  const seen = new Set(), byArtist = {}, out = [];
+  let guard = 0;
+  while(out.length < n && guard++ < n * 40){
+    let pick = 0, best = -Infinity;
+    for(let c = 0; c < ranked.length; c++){
+      if(idx[c] >= ranked[c].length) continue;
+      const deficit = weights[c] * (out.length + 1) - taken[c];
+      if(deficit > best){ best = deficit; pick = c; }
+    }
+    if(best === -Infinity) break;
+    const row = ranked[pick][idx[pick]++];
+    if(!row) continue;
+    const tr = row.t;
+    if(seen.has(tr.id)) continue;
+    const aid = tr.artists[0] ? tr.artists[0].id : tr.id;
+    if((byArtist[aid]||0) >= maxPerArtist) continue;
+    seen.add(tr.id); byArtist[aid] = (byArtist[aid]||0) + 1; taken[pick]++;
+    out.push({ ...tr, _c: pick, _s: row.s });
+  }
+  return out;
+}
+
+/* Rise and settle, then keep the same artist off consecutive slots. */
+function sequence(list){
+  const asc = [...list].sort((a,b) => (a.f.e ?? .5) - (b.f.e ?? .5));
+  const up = [], down = [];
+  asc.forEach((t, i) => (i % 2 ? down : up).push(t));
+  const seq = up.concat(down.reverse());
+  for(let i = 1; i < seq.length; i++){
+    const p = seq[i-1].artists[0]?.id, c = seq[i].artists[0]?.id;
+    if(p && p === c){
+      for(let j = i + 1; j < seq.length; j++){
+        if(seq[j].artists[0]?.id !== p){ [seq[i], seq[j]] = [seq[j], seq[i]]; break; }
+      }
+    }
+  }
+  return seq;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   BUILD
+   ═══════════════════════════════════════════════════════════════════ */
+let current = null;
+
+function build(){
+  const text = $('#vibe').value.trim();
+  if(!text) return vibeLog('Type a vibe first.');
+  const { concepts, unknown, matched } = parseVibe(text);
+  if(!concepts.length){
+    $('#readPanel').classList.remove('hidden'); $('#setPanel').classList.add('hidden');
+    renderChips([], unknown);
+    $('#mixWrap').innerHTML = ''; $('#readout').innerHTML = '';
+    return vibeLog('None of those words are in the lexicon yet. Try a place, a weather, a time of day, or a feeling.');
+  }
+  recount();
+  const pool = library.map(t => ({ ...t, f: features[t.id] })).filter(t => t.f);
+  if(pool.length < 5) return vibeLog('Not enough tracks have a reading yet. Run "Read audio features" first.');
+
+  const n = parseInt($('#lenSlider').value, 10);
+  const disc = parseInt($('#discSlider').value, 10) / 100;
+  const ranked = concepts.map(c => rankFor(c, pool, disc));
+  const picked = interleave(ranked, concepts.map(c => c.weight), n);
+  current = { seq: sequence(picked), concepts, text };
+
+  renderReading(concepts, matched, unknown);
+  renderSet(current.seq, concepts);
+  $('#plName').value = text.replace(/\b\w/g, m => m.toUpperCase());
+  vibeLog(`${current.seq.length} track${current.seq.length===1?'':'s'} from ${pool.length} readable.`);
+  $('#setPanel').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   RENDER
+   ═══════════════════════════════════════════════════════════════════ */
+const HUES = ['var(--sodium)','var(--seaglass)','#b39ddb','#e2795f','#8fb8e8'];
+
+function blended(concepts){
+  const v = {}, w = {};
+  concepts.forEach(c => {
+    for(const d in c.vec){ v[d] = (v[d]||0) + c.vec[d]*c.weight; w[d] = (w[d]||0) + c.weight; }
+  });
+  for(const d in v) v[d] /= w[d];
+  return v;
+}
+
+function renderReading(concepts, matched, unknown){
+  $('#readPanel').classList.remove('hidden');
+  $('#mixWrap').innerHTML = concepts.length > 1
+    ? '<div class="mix">' + concepts.map((c,i) =>
+        `<span style="width:${(c.weight*100).toFixed(0)}%;background:${HUES[i%HUES.length]}">${esc(c.label)} · ${Math.round(c.weight*100)}%</span>`
+      ).join('') + '</div>'
+    : `<p class="muted" style="margin:0 0 14px">Single reading: <b style="color:var(--mist)">${esc(concepts[0].label)}</b> at 100%.</p>`;
+
+  const v = blended(concepts);
+  $('#readout').innerHTML = DIMS.map(d => {
+    if(v[d] === undefined) return '';
+    const pct = Math.round(v[d]*100);
+    const spread = concepts.map(c => c.vec[d]).filter(x => x !== undefined);
+    const lo = Math.min(...spread)*100, hi = Math.max(...spread)*100;
+    const shown = d === 't' ? Math.round(60 + v[d]*120) + ' bpm' : pct + '%';
+    return `<div class="gauge">
+      <div class="lab"><span>${DIM_NAME[d]}</span><b>${shown}</b></div>
+      <div class="track-line">
+        ${[0,25,50,75,100].map(p => `<i class="tick" style="left:${p}%"></i>`).join('')}
+        ${spread.length>1 ? `<i class="band" style="left:${lo}%;width:${Math.max(hi-lo,1)}%"></i>` : ''}
+        <i class="needle" style="left:${pct}%"></i>
+      </div></div>`;
+  }).join('');
+  renderChips(matched, unknown);
+}
+
+function renderChips(matched, unknown){
+  const seen = new Set();
+  const read = matched.filter(m => { if(seen.has(m.key)) return false; seen.add(m.key); return true; })
+    .map(m => `<span class="chip">${esc(m.word)}${m.how!=='exact' ? ' → ' + esc(m.key) : ''}</span>`).join('');
+  const miss = unknown.length
+    ? `<span class="chip miss">not in the lexicon: ${unknown.map(esc).join(', ')}</span>` : '';
+  $('#chips').innerHTML = read + miss;
+}
+
+function renderSet(seq, concepts){
+  $('#setPanel').classList.remove('hidden');
+  $('#setList').innerHTML = seq.map(t => {
+    const bpm = t.f.bpm ? Math.round(t.f.bpm) + ' bpm' : '—';
+    const tag = concepts.length > 1
+      ? `<span style="color:${HUES[t._c%HUES.length]}">${esc(concepts[t._c].label.split(' ')[0])}</span> · ` : '';
+    return `<li>
+      <div><div class="t">${esc(t.name)}</div><div class="a">${esc(t.artists.map(a=>a.name).join(', '))}</div></div>
+      <div class="m">${tag}${bpm}${t.f.est ? ' · <span class="est">est</span>' : ''}</div>
+    </li>`;
+  }).join('');
+  $('#setLog').textContent = '';
+}
+
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   CREATE PLAYLIST
+   POST /me/playlists   (users/{id}/playlists removed Feb 2026)
+   POST /playlists/{id}/items  (…/tracks removed Feb 2026)
+   ═══════════════════════════════════════════════════════════════════ */
+async function createPlaylist(){
+  if(!current || !current.seq.length) return;
+  const btn = $('#createBtn'); btn.disabled = true;
+  const name = $('#plName').value.trim() || current.text;
+  try{
+    setLog('Creating playlist…');
+    const pl = await sp('/me/playlists', { method:'POST', body: JSON.stringify({
+      name, public:false,
+      description: `Setlist · "${current.text}" · ` + current.concepts.map(c => `${c.label} ${Math.round(c.weight*100)}%`).join(' + ')
+    })});
+    const uris = current.seq.map(t => 'spotify:track:' + t.id);
+    for(let i = 0; i < uris.length; i += 100){
+      const body = JSON.stringify({ uris: uris.slice(i, i+100) });
+      try{
+        await sp(`/playlists/${pl.id}/items`, { method:'POST', body });
+      }catch(e){
+        if(/404/.test(e.message)) await sp(`/playlists/${pl.id}/tracks`, { method:'POST', body });
+        else throw e;
+      }
+      setLog(`Adding tracks… ${Math.min(i+100, uris.length)} of ${uris.length}`);
+    }
+    const url = pl.external_urls?.spotify || `https://open.spotify.com/playlist/${pl.id}`;
+    $('#setLog').innerHTML = `Saved. <a href="${url}" target="_blank" rel="noopener">Open “${esc(name)}” in Spotify →</a>`;
+  }catch(e){
+    setLog('Could not save: ' + e.message);
+  }
+  btn.disabled = false;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   UI PLUMBING
+   ═══════════════════════════════════════════════════════════════════ */
+function progress(f){ $('#prog').style.width = (Math.max(0, Math.min(1, f))*100) + '%'; }
+function libLog(s){ $('#libLog').textContent = s; }
+function vibeLog(s){ $('#vibeLog').textContent = s; }
+function setLog(s){ $('#setLog').textContent = s; }
+function note(msg, err){
+  const w = $('#originWarn'); w.className = 'notice' + (err ? ' err' : ''); w.textContent = msg; w.classList.remove('hidden');
+}
+function busy(on){
+  abort = on ? false : abort;
+  ['syncBtn','refreshBtn','featBtn','buildBtn'].forEach(id => { const el = $('#'+id); if(el) el.disabled = on; });
+  $('#stopBtn').classList.toggle('hidden', !on);
+}
+
+function paint(){
+  const authed = !!tokens;
+  $('#libPanel').classList.toggle('hidden', !authed);
+  $('#forget').classList.toggle('hidden', !authed);
+  $('#connect').textContent = authed ? 'Reconnect' : 'Connect Spotify';
+
+  const has = library.length > 0;
+  $('#syncBtn').classList.toggle('hidden', has);
+  $('#refreshBtn').classList.toggle('hidden', !has);
+  $('#featBtn').classList.toggle('hidden', !has);
+
+  const read = library.filter(t => features[t.id]).length;
+  $('#vibePanel').classList.toggle('hidden', !(authed && read >= 5));
+  $('#cacheInfo').innerHTML = `${library.length} tracks · ${read} with a reading · ${Object.keys(features).length} looked up · ${Object.keys(genres).length} artists cached`;
+  if(has && read === 0) libLog(`${library.length} tracks loaded. Next: read audio features.`);
+}
+
+/* events */
+$('#redirUri').textContent = REDIRECT_URI;
+$('#copyRedir').onclick = async () => {
+  try{ await navigator.clipboard.writeText(REDIRECT_URI); $('#copyRedir').textContent = 'Copied'; setTimeout(()=>$('#copyRedir').textContent='Copy',1400); }catch(e){}
+};
+$('#clientId').value = clientId;
+$('#clientId').oninput = e => { clientId = e.target.value.trim(); save(K.cid, clientId); };
+$('#connect').onclick = beginAuth;
+$('#forget').onclick = () => {
+  [K.tok, K.top].forEach(k => localStorage.removeItem(k));
+  tokens = null; topArt = null; paint(); note('Signed out. Your library cache is still here.');
+};
+$('#syncBtn').onclick   = () => syncLibrary(false).catch(e => { busy(false); libLog(e.message); });
+$('#refreshBtn').onclick= () => syncLibrary(true).catch(e => { busy(false); libLog(e.message); });
+$('#featBtn').onclick   = () => fetchFeatures().catch(e => { busy(false); libLog(e.message); });
+$('#stopBtn').onclick   = () => { abort = true; libLog('Stopped. Progress is saved — press again to continue.'); busy(false); };
+$('#clearFeat').onclick = () => { features = {}; genres = {}; save(K.feat,{}); save(K.gen,{}); paint(); libLog('Feature cache cleared.'); };
+$('#clearAll').onclick  = () => { Object.values(K).forEach(k => localStorage.removeItem(k)); location.reload(); };
+$('#buildBtn').onclick  = build;
+$('#createBtn').onclick = createPlaylist;
+$('#vibe').addEventListener('keydown', e => { if(e.key === 'Enter') build(); });
+$('#lenSlider').oninput = e => $('#lenVal').textContent = e.target.value + ' tracks';
+$('#discSlider').oninput = e => {
+  const v = +e.target.value;
+  $('#discVal').textContent = v < 20 ? 'comfort listening' : v < 42 ? 'mostly familiar' : v < 59 ? 'balanced' : v < 80 ? 'leaning new' : 'deep cuts only';
+};
+
+/* boot */
+(async function(){
+  if(location.origin + location.pathname !== REDIRECT_URI && !/^https:\/\/dfuzzy69\.github\.io\/setlist\/?$/.test(location.href.split('?')[0])){
+    note(`This page is at ${location.origin + location.pathname}, but the redirect URI is fixed to ${REDIRECT_URI}. Login will fail anywhere else.`, true);
+  }
+  if(location.search.includes('code=') || location.search.includes('error=')){
+    if(await completeAuth()) note('Connected.');
+  }
+  paint();
+  if(tokens){ loadTop(); }
+  if(library.length && !Object.keys(features).length) libLog(`${library.length} tracks loaded. Next: read audio features.`);
+  else if(library.length) libLog(`${library.length} tracks · ${library.filter(t=>features[t.id]).length} with a reading.`);
+})();
+</script>
+</div>
+</body>
+</html>
