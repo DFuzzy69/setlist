@@ -158,7 +158,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 8</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 10</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -215,6 +215,14 @@ details[open] summary{margin-bottom:12px}
         <button data-src="new">New to me</button>
       </div>
     </div>
+    <div style="flex:1 1 100%">
+      <label class="f">Language</label>
+      <div class="seg" id="langSeg">
+        <button data-lang="lean" class="on">Lean English</button>
+        <button data-lang="strict">English &amp; Spanish only</button>
+        <button data-lang="any">Any</button>
+      </div>
+    </div>
     <div>
       <div class="rangehead"><label class="f" for="lenSlider" style="margin:0">Length</label><b id="lenVal">25 tracks</b></div>
       <input type="range" id="lenSlider" min="5" max="80" step="1" value="25">
@@ -248,7 +256,8 @@ details[open] summary{margin-bottom:12px}
     <div>
       <div class="f" style="margin-bottom:6px">Bio</div>
       <input type="text" id="bio" maxlength="70" autocomplete="off">
-      <p class="muted" style="margin:8px 0 0;font-size:12px">Cover and bio are generated from the reading. Edit the bio if you like — both go up with the playlist.</p>
+      <div class="row" style="margin-top:10px"><button id="reroll" style="padding:6px 12px;font-size:13px">Try another photo</button></div>
+      <p class="muted" id="coverNote" style="margin:8px 0 0;font-size:12px"></p>
     </div>
   </div>
   <ol class="set" id="setList"></ol>
@@ -278,7 +287,7 @@ const RECCO = 'https://api.reccobeats.com/v1';
 const AUTH  = 'https://accounts.spotify.com/authorize';
 const TOKEN = 'https://accounts.spotify.com/api/token';
 
-const K = { cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
+const K = { pho:'sl.pho', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
 
 const $ = s => document.querySelector(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -1040,9 +1049,54 @@ function fit(vec, f){
   return Math.max(0, 1 - rms * 1.45);
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   LANGUAGE LEAN
+   Spotify exposes no language field, so this reads the track and artist
+   names. Non-Latin scripts are near-certain; Latin-script languages are
+   inferred from function words, so it nudges rather than filters.
+   ═══════════════════════════════════════════════════════════════════ */
+const NONLATIN = /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F\u3040-\u30FF\u4E00-\u9FFF\u0400-\u04FF\u0600-\u06FF\u0900-\u097F\u0E00-\u0E7F\u0590-\u05FF\u0370-\u03FF]/;
+/* Any non-English European marker. Ambiguous words that are also English
+   ("no", "si", "a", "me") are deliberately left out. */
+const FOREIGN = /\b(el|la|los|las|una|de|del|que|con|por|para|muy|le|les|des|du|je|est|dans|pour|avec|moi|toi|tres|et|der|die|das|und|ich|nicht|mit|ein|eine|ist|nur|nao|voce|tudo|meu|minha|com|il|lo|gli|nel|della|dei|delle|di|che|non|sono|mio|come|quando|perche|cosi|questo|questa|och|jag|det|som|het|een|dla|jest)\b/;
+const SPANISH = /\b(el|la|los|las|del|que|con|por|para|muy|corazon|amor|vida|noche|dia|quiero|contigo|bailar|siempre|nunca|nada|todo|mujer|tiempo|cielo|fuego|luna|sol|calle|sueno|besos|loco|ganas)\b/;
+const ES_MARK = /[ñ¿¡]/;
+const OTHER_MARK = /[çœßøåæğışłžčšřýãõ]/;
+const ACCENT = /[áéíóúàèìòùâêîôûäëïöüăąćęłńśźż]/;
+/* Morphology, for titles too short to contain function words */
+const ES_SHAPE = /(cion\b|ando\b|iendo\b|ito\b|ita\b|itos\b|itas\b|mente\b|dad\b|eza\b)/;
+const FR_SHAPE = /\b(vous|nous|toujours|rien|coeur|oui|jamais|encore|amour)\b|(ez\b|eux\b|oux\b)/;
+const DE_SHAPE = /\b(luft|liebe|nacht|herz|welt|mein|dein|kein|alles|wieder|ohne|uber|zeit|leben)/;
+
+let langPref = 'lean';
+
+/* Strip accents so "corazón" matches "corazon", but test the raw string first
+   for marks that are themselves the giveaway. */
+function langOf(t){
+  const raw = ((t.name || '') + ' ' + t.artists.map(a => a.name).join(' ')).toLowerCase();
+  if(NONLATIN.test(raw)) return 'other';
+  const flat = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if(ES_MARK.test(raw)) return 'es';
+  if(SPANISH.test(flat) || ES_SHAPE.test(flat)) return 'es';
+  if(OTHER_MARK.test(raw)) return 'other';
+  if(FOREIGN.test(flat) || FR_SHAPE.test(flat) || DE_SHAPE.test(flat)) return 'other';
+  if(ACCENT.test(raw)) return 'other';      // accented but unplaceable — not English
+  return 'en';
+}
+function langBonus(t){
+  if(langPref === 'any') return 0;
+  const l = langOf(t);
+  return l === 'en' ? 0.05 : l === 'es' ? 0.02 : -0.15;
+}
+function langAllowed(t){
+  if(langPref !== 'strict') return true;
+  const l = langOf(t);
+  return l === 'en' || l === 'es';
+}
+
 function rankFor(concept, pool, disc){
   const bias = (disc - 0.5) * 2;     // -1 familiar … +1 discovery
-  return pool.map(t => {
+  return pool.filter(langAllowed).map(t => {
     const base = fit(concept.vec, t.f);
     const fam = familiarity(t);
     /* Estimated features are a genre centroid, and we search the genres closest
@@ -1053,7 +1107,7 @@ function rankFor(concept, pool, disc){
       let h = 0; for(let i = 0; i < t.id.length; i++) h = (h * 31 + t.id.charCodeAt(i)) >>> 0;
       pen = 0.13 + (h % 1000) / 1000 * 0.07;
     }
-    return { t, s: base - bias * fam * 0.30 - pen };
+    return { t, s: base - bias * fam * 0.30 - pen + langBonus(t) };
   }).sort((a,b) => b.s - a.s);
 }
 
@@ -1300,55 +1354,118 @@ function makeBio(concepts){
   return w.length > 10 ? w.slice(0, 10).join(' ') : out;
 }
 
-async function makeCover(concepts, text){
-  const cv = $('#cover'), g = cv.getContext('2d');
-  const S = 640, v = blended(concepts);
-  try{ await document.fonts.load('800 60px "Bricolage Grotesque"'); }catch(e){}
+/* One grade for every cover: duotone into the dusk palette, vignette, grain.
+   Different photos, same family. */
+function grade(g, S, warmth, push){
+  const img = g.getImageData(0,0,S,S), p = img.data;
+  const shadow = [13,16,24], mid = [58,74,92], hi = [242,197,126];
+  const tint = 0.82;
+  for(let i = 0; i < p.length; i += 4){
+    let l = (p[i]*0.299 + p[i+1]*0.587 + p[i+2]*0.114) / 255;
+    l = Math.min(1, Math.max(0, (l - 0.5) * 1.22 + 0.5));       // contrast
+    let r, gg, b;
+    if(l < 0.5){ const t = l*2; r = shadow[0]+(mid[0]-shadow[0])*t; gg = shadow[1]+(mid[1]-shadow[1])*t; b = shadow[2]+(mid[2]-shadow[2])*t; }
+    else       { const t = (l-0.5)*2; r = mid[0]+(hi[0]-mid[0])*t; gg = mid[1]+(hi[1]-mid[1])*t; b = mid[2]+(hi[2]-mid[2])*t; }
+    p[i]   = p[i]  *(1-tint) + r *tint;
+    p[i+1] = p[i+1]*(1-tint) + gg*tint;
+    p[i+2] = p[i+2]*(1-tint) + b *tint;
+  }
+  g.putImageData(img, 0, 0);
 
-  const warmth = v.v === undefined ? 0.5 : v.v;      // brightness of the vibe
-  const push   = v.e === undefined ? 0.5 : v.e;      // how hard it hits
+  const vig = g.createRadialGradient(S/2, S*0.45, S*0.2, S/2, S/2, S*0.78);
+  vig.addColorStop(0, 'rgba(0,0,0,0)');
+  vig.addColorStop(1, `rgba(6,8,14,${0.5 + (1-push)*0.2})`);
+  g.fillStyle = vig; g.fillRect(0,0,S,S);
 
+  g.globalAlpha = 0.05;
+  for(let i = 0; i < 5200; i++){
+    g.fillStyle = Math.random() > 0.5 ? '#fff' : '#000';
+    g.fillRect(Math.random()*S, Math.random()*S, 1.4, 1.4);
+  }
+  g.globalAlpha = 1;
+}
+
+function drawGauges(g, S, v, warmth, push){
   g.fillStyle = '#0d1018'; g.fillRect(0,0,S,S);
   const wash = g.createLinearGradient(0, S, S, 0);
   wash.addColorStop(0, `hsl(${205 - warmth*30}, ${18+push*22}%, ${7+push*7}%)`);
   wash.addColorStop(1, `hsl(${38 + (1-warmth)*140}, ${30+push*35}%, ${11+push*14}%)`);
   g.fillStyle = wash; g.fillRect(0,0,S,S);
-
-  // the eight gauges, same instrument as the on-screen readout
   const dims = DIMS.filter(d => v[d] !== undefined);
-  const top = 300, gap = 34, L = 64, R = S - 64;
+  const gap = 40, L = 70, R = S - 70, top = (S - (dims.length-1)*gap) / 2;
   dims.forEach((d, i) => {
-    const y = top + i * gap;
+    const y = top + i * gap, x = L + (R - L) * v[d];
     g.strokeStyle = 'rgba(255,255,255,.12)'; g.lineWidth = 1;
     g.beginPath(); g.moveTo(L, y); g.lineTo(R, y); g.stroke();
-    const x = L + (R - L) * v[d];
-    g.strokeStyle = 'rgba(232,163,74,.30)'; g.lineWidth = 5;
+    g.strokeStyle = 'rgba(232,163,74,.30)'; g.lineWidth = 6;
     g.beginPath(); g.moveTo(L, y); g.lineTo(x, y); g.stroke();
-    g.fillStyle = '#e8a34a';
-    g.fillRect(x - 2, y - 11, 4, 22);
-    g.beginPath(); g.arc(x, y - 15, 5, 0, 7); g.fill();
+    g.fillStyle = '#e8a34a'; g.fillRect(x - 2, y - 13, 5, 26);
+    g.beginPath(); g.arc(x, y - 18, 6, 0, 7); g.fill();
   });
-
-  // the words
-  const words = text.trim().split(/\s+/);
-  g.fillStyle = '#fff'; g.textBaseline = 'alphabetic';
-  let size = words.length > 4 ? 62 : 78, line = [], lines = [];
-  g.font = `800 ${size}px "Bricolage Grotesque", system-ui, sans-serif`;
-  for(const w of words){
-    line.push(w);
-    if(g.measureText(line.join(' ')).width > R - L){ line.pop(); if(line.length) lines.push(line.join(' ')); line = [w]; }
-  }
-  if(line.length) lines.push(line.join(' '));
-  lines = lines.slice(0, 4);
-  lines.forEach((ln, i) => g.fillText(ln, L, 118 + i * (size * 0.94)));
-
-  g.font = '500 21px "DM Mono", ui-monospace, monospace';
-  g.fillStyle = 'rgba(255,255,255,.55)';
-  g.fillText(makeBio(concepts).toUpperCase(), L, S - 44);
-
-  $('#coverWrap').classList.remove('hidden');
-  return cv;
 }
+
+/* Openverse: keyless, restricted to public-domain / CC0 so covers carry no
+   attribution obligation. Anonymous access is capped at 5 requests/hour, so
+   every result is cached per vibe and reused. */
+let photoCache = load(K.pho, {});
+
+async function findPhoto(query, fresh){
+  if(!fresh && photoCache[query]) return photoCache[query];
+  const url = `https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}`
+            + `&license=cc0,pdm&page_size=12&mature=false`;
+  const r = await fetch(url, { headers:{ Accept:'application/json' } });
+  if(r.status === 429) throw new Error('rate');
+  if(!r.ok) throw new Error('search ' + r.status);
+  const j = await r.json();
+  const hits = (j.results || []).filter(x => x.thumbnail).map(x => x.thumbnail);
+  if(!hits.length) throw new Error('no photo');
+  photoCache[query] = hits.slice(0, 8);
+  save(K.pho, photoCache);
+  return photoCache[query];
+}
+
+function loadImg(src){
+  return new Promise((res, rej) => {
+    const im = new Image();
+    im.crossOrigin = 'anonymous';
+    im.onload = () => res(im);
+    im.onerror = () => rej(new Error('image blocked'));
+    im.src = src;
+    setTimeout(() => rej(new Error('image timed out')), 12000);
+  });
+}
+
+async function makeCover(concepts, text, fresh){
+  const cv = $('#cover'), g = cv.getContext('2d'), S = 640;
+  const v = blended(concepts);
+  const warmth = v.v === undefined ? 0.5 : v.v;
+  const push   = v.e === undefined ? 0.5 : v.e;
+  $('#coverWrap').classList.remove('hidden');
+  coverNote('Finding a photo…');
+
+  // strip prepositions/stopwords so the search reads as a scene
+  const query = text.toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/)
+    .filter(w => w && !STOP.has(w)).join(' ') || text;
+
+  try{
+    const hits = await findPhoto(query, fresh);
+    const im = await loadImg(hits[Math.floor(Math.random() * hits.length)]);
+    const scale = Math.max(S / im.width, S / im.height);
+    const w = im.width * scale, h = im.height * scale;
+    g.clearRect(0,0,S,S);
+    g.drawImage(im, (S-w)/2, (S-h)/2, w, h);
+    grade(g, S, warmth, push);
+    coverNote('Public-domain photo, graded to match.');
+  }catch(e){
+    drawGauges(g, S, v, warmth, push);
+    coverNote(
+      e.message === 'rate' ? 'Photo search limit reached (5 an hour without an account) — using the reading for now.'
+      : e.message === 'no photo' ? 'No public-domain photo matched those words — using the reading instead.'
+      : 'Photo could not be loaded — using the reading instead.');
+  }
+}
+
+function coverNote(s){ const el = $('#coverNote'); if(el) el.textContent = s; }
 
 function coverBytes(){
   const cv = $('#cover');
@@ -1470,6 +1587,13 @@ document.querySelectorAll('#srcSeg button').forEach(b => {
   };
 });
 $('#createBtn').onclick = createPlaylist;
+$('#reroll').onclick = () => { if(current) makeCover(current.concepts, current.text, true); };
+document.querySelectorAll('#langSeg button').forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll('#langSeg button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on'); langPref = b.dataset.lang;
+  };
+});
 $('#vibe').addEventListener('keydown', e => { if(e.key === 'Enter') build(); });
 $('#lenSlider').oninput = e => $('#lenVal').textContent = e.target.value + ' tracks';
 $('#discSlider').oninput = e => {
