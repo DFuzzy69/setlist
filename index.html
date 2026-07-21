@@ -158,7 +158,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 17</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 20</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -692,9 +692,9 @@ async function findNew(concepts, ranked, want){
    ═══════════════════════════════════════════════════════════════════ */
 const RAW = {
 /* weather & sky */
-'hurricane|cyclone|typhoon':      'n t.78 e.96 v.20 d.40 a.05 i.35 l.55',
-'storm|stormy|thunderstorm':      'n t.70 e.90 v.25 d.42 a.12 i.35 l.45',
-'thunder|lightning':              'n t.68 e.92 v.30 d.45 a.10 i.30',
+'hurricane|cyclone|typhoon':      'n t.75 e.97 v.20 d.42 a.03',
+'storm|stormy|thunderstorm':      'n t.72 e.93 v.24 d.44 a.06',
+'thunder|lightning':              'n t.70 e.93 v.28 d.45 a.08',
 'rain|rainy|drizzle|downpour':    'n t.38 e.32 v.32 d.38 a.62 i.45',
 'fog|foggy|mist|misty|haze|hazy': 'a t.30 e.24 v.34 d.30 a.60 i.55',
 'snow|snowy|blizzard|frost':      'n t.30 e.28 v.38 d.28 a.66 i.55',
@@ -784,7 +784,7 @@ const RAW = {
 'sad|sadness|sorrow|blue|down':   'a t.34 e.26 v.10 d.32 a.62 i.35',
 'crying|weeping|tears|sobbing':   'n t.28 e.22 v.06 d.25 a.70 i.30',
 'happy|happiness|joy|joyful':     'a t.62 e.72 v.92 d.72 a.30',
-'angry|anger|rage|furious|fury':  'n t.72 e.96 v.15 d.50 a.03 s.30',
+'angry|anger|rage|furious|fury':  'n t.74 e.97 v.15 d.48 a.02',
 'calm|calming|serene|still|quiet':'a t.32 e.20 v.58 d.30 a.70 i.70',
 'peace|peaceful|tranquil':        'n t.30 e.20 v.65 d.28 a.72 i.68',
 'anxious|anxiety|panic|dread':    'n t.62 e.68 v.15 d.42 a.30 i.55',
@@ -796,14 +796,14 @@ const RAW = {
 'tender|gentle|soft|delicate':    'a t.36 e.26 v.62 d.38 a.72 i.45',
 'hopeful|hope|uplifting':         'a t.55 e.62 v.80 d.55 a.40',
 'triumphant|victory|glory|winning':'a t.65 e.88 v.82 d.55 a.15 l.40',
-'defiant|rebellion|riot|protest': 'n t.72 e.92 v.42 d.55 a.05 l.45',
+'defiant|rebellion|riot|protest': 'n t.74 e.94 v.40 d.52 a.04',
 'confident|swagger|cocky|bold':   'a t.62 e.78 v.72 d.85 a.08 s.28',
 'menacing|sinister|ominous|dread':'a t.52 e.70 v.10 d.42 a.15 i.60',
 'creepy|haunted|eerie|uncanny':   'a t.38 e.42 v.12 d.30 a.40 i.72',
 'ghost|spectral|phantom':         'n t.34 e.32 v.20 d.28 a.48 i.70',
-'chaos|chaotic|frenzy|mania':     'n t.80 e.94 v.42 d.55 a.05 l.45',
+'chaos|chaotic|frenzy|mania':     'n t.80 e.95 v.40 d.52 a.04',
 'apocalypse|doom|end|ruin|decay': 'n t.45 e.72 v.10 d.35 a.20 i.55',
-'war|battle|combat|siege':        'n t.68 e.92 v.20 d.42 a.08 i.45',
+'war|battle|combat|siege':        'n t.70 e.94 v.20 d.44 a.05',
 'revenge|vengeance|spite':        'n t.62 e.85 v.22 d.60 a.08 s.28',
 'bittersweet|melancholy|wistful': 'a t.40 e.35 v.28 d.40 a.60 i.40',
 'euphoria|euphoric|ecstatic|bliss':'n t.78 e.92 v.90 d.82 a.05 i.45',
@@ -1168,19 +1168,49 @@ function taste(f){
 
 /* A multi-part vibe is always fused: the weighted geometric mean of each
    concept's fit, so being strong on one and weak on another is punished hard.
-   Averaging would reward the midpoint, which is neither thing. */
-const BOTH_SHARE = 0.85;   // share of the playlist that must satisfy every concept
-const BALANCE    = 0.72;   // weakest concept fit vs strongest, within one track
+   Averaging would reward the midpoint, which is neither thing.
+
+   There is deliberately NO "must be balanced" rule. Requiring every track to
+   score evenly across concepts promotes the mediocre-at-everything track over
+   the one that genuinely nails the main subject — a 65/62 lands above a 95/38,
+   which is how a country revenge song ends up in a hurricane playlist. The
+   geometric mean already rewards doing both; what it needs alongside it is a
+   floor on the head concept so nothing gets in that fails the main subject. */
+const HEAD_MIN = 0.72;   // absolute: every track must actually be the main thing
+const BALANCE  = 0.72;   // reporting only — what counts as "does the whole vibe"
 
 function conceptFits(concepts, f){ return concepts.map(c => fit(c.vec, f)); }
 
+/* "hurricane on a beach" is a hurricane you experience at a beach. The head
+   has to dominate the sound, but the setting must still be *present* — the
+   reference tracks that felt right scored 88/43 and 80/44, so the modifier
+   sits near half the head. Both failure modes are real: 95/20 is a storm with
+   no beach in it, 70/62 is neither thing. So score the head, then penalise
+   drifting outside that band in either direction. */
+const MOD_RATIO = 0.52;   // where the modifier should sit relative to the head
+const MOD_TOL   = 0.10;   // free band around it
+const MOD_PEN   = 0.60;   // cost per unit of drift beyond the band
+
 function fuse(concepts, f){
-  let s = 0;
-  for(let i = 0; i < concepts.length; i++){
-    const x = Math.max(fit(concepts[i].vec, f), 0.05);   // floor, or one miss zeroes it
-    s += concepts[i].weight * Math.log(x);
-  }
-  return Math.exp(s);
+  const head = fit(concepts[0].vec, f);
+  if(concepts.length === 1) return head;
+  let m = 0;
+  for(let i = 1; i < concepts.length; i++) m += fit(concepts[i].vec, f);
+  m /= (concepts.length - 1);
+  if(head <= 0) return 0;
+  const r = m / head;
+  const drift = Math.max(0, Math.abs(r - MOD_RATIO) - MOD_TOL);
+  return Math.max(0, head - MOD_PEN * drift);
+}
+
+/* A modifier scoring at or above the head means the setting has taken over —
+   that's a beach song, not a hurricane on a beach. */
+function shapeOk(cf){
+  if(cf.length < 2) return true;
+  let m = 0;
+  for(let i = 1; i < cf.length; i++) m += cf[i];
+  m /= (cf.length - 1);
+  return cf[0] > 0 && m / cf[0] <= 0.95;
 }
 
 /* Does this track do every part of the vibe, rather than one part well? */
@@ -1200,7 +1230,7 @@ function adjust(t, base, disc){
   /* Taste is always on. The slider moves you off your most-played artists,
      not off your taste — at full discovery you want new names that still
      sound like your library, not noise. */
-  return base + TASTE_W * taste(t.f) - bias * familiarity(t) * 0.30 - pen;
+  return base + TASTE_W * taste(t.f) - bias * familiarity(t) * 0.45 - pen;
 }
 
 function rankFused(concepts, pool, disc){
@@ -1210,17 +1240,11 @@ function rankFused(concepts, pool, disc){
   }).sort((a,b) => b.s - a.s);
 }
 
-/* Split a ranked source in two: tracks that satisfy every concept, and the
-   remainder — which is re-ranked on the head concept alone, since that's what
-   the extra slots should follow. Both sides must clear their language bar. */
-function partition(ranked, best){
-  const all = [], head = [];
-  for(const r of ranked){
-    if(r.raw < langBar(r.t, best)) continue;
-    (doesAll(r.cf) ? all : head).push(r);
-  }
-  head.sort((a,b) => (b.cf[0] - a.cf[0]) || (b.s - a.s));
-  return [all, head];
+/* Keep tracks that actually are the main subject and clear their language bar.
+   One ranked list — the fused score already orders "does both" above "does one",
+   so nothing needs bucketing. */
+function eligible(ranked, best){
+  return ranked.filter(r => r.cf[0] >= HEAD_MIN && shapeOk(r.cf) && r.raw >= langBar(r.t, best));
 }
 
 /* Single-concept ranking. Only used to pick seed tracks for recommendations,
@@ -1234,7 +1258,7 @@ function rankFor(concept, pool, disc){
       let h = 0; for(let i = 0; i < t.id.length; i++) h = (h * 31 + t.id.charCodeAt(i)) >>> 0;
       pen = 0.13 + (h % 1000) / 1000 * 0.07;
     }
-    return { t, s: base - bias * familiarity(t) * 0.30 - pen };
+    return { t, s: base - bias * familiarity(t) * 0.45 - pen };
   }).sort((a,b) => b.s - a.s);
 }
 
@@ -1320,7 +1344,7 @@ async function build(){
   $('#buildBtn').disabled = true;
 
   try{
-    let streams, weights, quotas = null, wantMine = null, wantAll = null;
+    let streams, weights, quotas = null, wantMine = null;
 
     const sourceOf = async () => {
       if(source === 'lib') return { mine, fresh: [] };
@@ -1343,18 +1367,13 @@ async function build(){
     const rFresh = src.fresh.length ? rankFused(concepts, src.fresh, disc) : [];
     const best = Math.max(0.0001, ...rMine.map(r => r.raw), ...rFresh.map(r => r.raw));
 
-    const [aMine, hMine]   = partition(rMine, best);
-    const [aFresh, hFresh] = partition(rFresh, best);
+    const eMine  = eligible(rMine, best);
+    const eFresh = eligible(rFresh, best);
 
-    /* Four streams: satisfies-everything and follows-the-head, for each source.
-       85% of the playlist comes from the first kind. */
     const mineShare  = src.fresh.length ? (src.mine.length ? 1 - disc : 0) : 1;
     const freshShare = src.mine.length  ? (src.fresh.length ? disc : 0)    : 1;
-    streams = [aMine, hMine, aFresh, hFresh];
-    weights = [
-      mineShare  * BOTH_SHARE, mineShare  * (1 - BOTH_SHARE),
-      freshShare * BOTH_SHARE, freshShare * (1 - BOTH_SHARE)
-    ];
+    streams = [eMine, eFresh];
+    weights = [mineShare, freshShare];
     const tot = weights.reduce((a,b) => a+b, 0) || 1;
     weights = weights.map(w => w / tot);
 
@@ -1363,12 +1382,10 @@ async function build(){
     let left = n - quotas.reduce((x,y) => x+y, 0);
     raw.map((v,i) => ({ i, r: v - Math.floor(v) })).sort((x,y) => y.r - x.r)
        .forEach(x => { if(left > 0){ quotas[x.i]++; left--; } });
-    wantMine = quotas[0] + quotas[1];
-    wantAll  = quotas[0] + quotas[2];
+    wantMine = quotas[0];
 
     const avail = streams.reduce((a, st) => a + st.length, 0);
-    const picked = interleave(streams, weights, n, 2, quotas)
-      .map(t => ({ ...t, _head: t._c === 1 || t._c === 3 }));
+    const picked = interleave(streams, weights, n, 2, quotas);
     current = { seq: sequence(picked), concepts, text };
 
     renderReading(concepts, matched, unknown);
@@ -1379,7 +1396,7 @@ async function build(){
 
     const isNew = current.seq.filter(t => t.neu).length;
     const gotMine = current.seq.length - isNew;
-    const gotAll = current.seq.filter(t => !t._head).length;
+    const gotAll = current.seq.filter(t => t._cf && doesAll(t._cf)).length;
     const pct = current.seq.length ? Math.round(gotAll / current.seq.length * 100) : 0;
     let msg = `${current.seq.length} track${current.seq.length===1?'':'s'} · ${gotMine} yours, ${isNew} new`;
     if(concepts.length > 1) msg += ` · ${pct}% do the whole vibe`;
@@ -1459,7 +1476,7 @@ function renderSet(seq, concepts){
     }
     return `<li>
       <div><div class="t">${esc(t.name)}</div><div class="a">${esc(t.artists.map(a=>a.name).join(', '))}</div></div>
-      <div class="m">${tag}${bpm}${t.f.est ? ' · <span class="est">est</span>' : ''}${t._ts !== undefined ? ' · you ' + Math.round(t._ts*100) : ''}${t.neu ? ' · <span class="neu">new</span>' : ''}${t._head ? ' · <span class="est">head</span>' : ''}</div>
+      <div class="m">${tag}${bpm}${t.f.est ? ' · <span class="est">est</span>' : ''}${t._ts !== undefined ? ' · you ' + Math.round(t._ts*100) : ''}${t.neu ? ' · <span class="neu">new</span>' : ''}</div>
     </li>`;
   }).join('');
   $('#setLog').textContent = '';
