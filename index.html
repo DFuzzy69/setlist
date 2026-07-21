@@ -1034,7 +1034,15 @@ function rankFor(concept, pool, disc){
   return pool.map(t => {
     const base = fit(concept.vec, t.f);
     const fam = familiarity(t);
-    return { t, s: base - bias * fam * 0.30 + (t.f.est ? -0.04 : 0) };
+    /* Estimated features are a genre centroid, and we search the genres closest
+       to the vibe — so they land dead-on the target and outscore real tracks.
+       Discount them, and jitter so a whole genre doesn't tie at one value. */
+    let pen = 0;
+    if(t.f.est){
+      let h = 0; for(let i = 0; i < t.id.length; i++) h = (h * 31 + t.id.charCodeAt(i)) >>> 0;
+      pen = 0.13 + (h % 1000) / 1000 * 0.07;
+    }
+    return { t, s: base - bias * fam * 0.30 - pen };
   }).sort((a,b) => b.s - a.s);
 }
 
@@ -1105,8 +1113,13 @@ async function build(){
   $('#buildBtn').disabled = true;
 
   try{
-    let pool = mine;
-    if(source !== 'lib'){
+    let streams, weights, streamConcept;
+
+    if(source === 'lib'){
+      const ranked = concepts.map(c => rankFor(c, mine, disc));
+      streams = ranked; weights = concepts.map(c => c.weight);
+      streamConcept = concepts.map((c,i) => i);
+    }else{
       const seedRanks = concepts.map(c => rankFor(c, mine, 0.5));
       const fresh = await findNew(concepts, seedRanks, n);
       if(!fresh.length){
@@ -1115,18 +1128,33 @@ async function build(){
           : 'No new tracks came back — building from your library only.');
         if(source === 'new'){ $('#buildBtn').disabled = false; return; }
       }
-      pool = source === 'new' ? (fresh.length ? fresh : mine) : mine.concat(fresh);
+      if(source === 'new' && fresh.length){
+        const ranked = concepts.map(c => rankFor(c, fresh, 0.5));
+        streams = ranked; weights = concepts.map(c => c.weight);
+        streamConcept = concepts.map((c,i) => i);
+      }else if(!fresh.length){
+        const ranked = concepts.map(c => rankFor(c, mine, disc));
+        streams = ranked; weights = concepts.map(c => c.weight);
+        streamConcept = concepts.map((c,i) => i);
+      }else{
+        /* Both: the slider is the mix ratio, not a nudge. Middle means half and half.
+           Two streams per concept so the split is exact rather than emergent. */
+        streams = []; weights = []; streamConcept = [];
+        concepts.forEach((c, i) => {
+          if(disc < 1){ streams.push(rankFor(c, mine, 0.5));  weights.push(c.weight * (1 - disc)); streamConcept.push(i); }
+          if(disc > 0){ streams.push(rankFor(c, fresh, 0.5)); weights.push(c.weight * disc);       streamConcept.push(i); }
+        });
+      }
     }
 
-    const ranked = concepts.map(c => rankFor(c, pool, disc));
-    const picked = interleave(ranked, concepts.map(c => c.weight), n);
+    const picked = interleave(streams, weights, n).map(t => ({ ...t, _c: streamConcept[t._c] }));
     current = { seq: sequence(picked), concepts, text };
 
     renderReading(concepts, matched, unknown);
     renderSet(current.seq, concepts);
     $('#plName').value = text.replace(/\b\w/g, m => m.toUpperCase());
     const fresh = current.seq.filter(t => t.neu).length;
-    vibeLog(`${current.seq.length} track${current.seq.length===1?'':'s'}${fresh ? ` · ${fresh} new to you` : ''}.`);
+    vibeLog(`${current.seq.length} track${current.seq.length===1?'':'s'} · ${current.seq.length - fresh} yours, ${fresh} new.`);
     $('#setPanel').scrollIntoView({ behavior:'smooth', block:'start' });
   }catch(e){
     vibeLog('Build failed: ' + e.message);
