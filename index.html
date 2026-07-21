@@ -141,6 +141,16 @@ ol.set .a{color:var(--dim);font-size:13px}
 ol.set .m{font-family:'DM Mono',monospace;font-size:10px;color:#5c6478;text-align:right;white-space:nowrap}
 .est{color:var(--sodium)}
 .neu{color:var(--seaglass)}
+.pill{display:inline-block;font-family:'DM Mono',monospace;font-size:10px;padding:2px 7px;margin-left:6px;
+  border:1px solid var(--haze);border-radius:20px;color:var(--dim)}
+.pill.newp{color:var(--seaglass);border-color:rgba(127,209,185,.35)}
+.pill.heardp{color:var(--sodium);border-color:rgba(232,163,74,.35)}
+.m .tech{display:none}
+body.showtech .m .tech{display:inline;margin-left:8px}
+.linkbtn{background:none;border:none;padding:0;font-family:'DM Mono',monospace;font-size:10px;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--dim);text-decoration:underline;
+  text-underline-offset:3px;cursor:pointer}
+.linkbtn:hover{color:var(--mist);background:none}
 .seg{display:inline-flex;border:1px solid var(--haze);border-radius:var(--r);overflow:hidden}
 .seg button{border:0;border-radius:0;background:transparent;padding:9px 15px;font-size:13px;color:var(--dim)}
 .seg button + button{border-left:1px solid var(--haze)}
@@ -163,14 +173,14 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 29</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 31</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
 
 <!-- SETUP -->
 <section class="panel" id="setupPanel">
-  <h2>Setup</h2>
+  <h2>Get started</h2>
   <div id="originWarn" class="notice err hidden"></div>
   <p class="muted" style="margin-top:0">Client ID is already filled in. Just press Connect.</p>
   <details style="margin-bottom:18px"><summary>Change the app it connects to</summary>
@@ -189,29 +199,30 @@ details[open] summary{margin-bottom:12px}
 
 <!-- LIBRARY -->
 <section class="panel hidden" id="libPanel">
-  <h2>Library</h2>
+  <h2>Your music</h2>
   <div class="row">
-    <button id="syncBtn" class="primary">Load liked songs</button>
+    <button id="syncBtn" class="primary">Set up my music</button>
     <button id="refreshBtn" class="hidden">Refresh</button>
-    <button id="featBtn" class="hidden">Read audio features</button>
+    <button id="featBtn" class="hidden">Continue setup</button>
     <button id="stopBtn" class="hidden">Stop</button>
   </div>
   <div class="bar"><i id="prog"></i></div>
   <div class="log" id="libLog">Not loaded yet.</div>
   <div class="fact hidden" id="factLine"></div>
-  <details style="margin-top:14px"><summary>Cache</summary>
+  <details style="margin-top:14px"><summary>Account &amp; data</summary>
     <div class="muted" id="cacheInfo"></div>
     <div class="row" style="margin-top:10px">
-      <button id="clearFeat">Clear feature cache</button>
-      <button id="clearAll">Clear everything</button>
+      <button id="forget2">Sign out</button>
+      <button id="clearFeat">Re-scan my songs</button>
+      <button id="clearAll">Erase everything</button>
     </div>
   </details>
 </section>
 
 <!-- VIBE -->
 <section class="panel hidden" id="vibePanel">
-  <h2>The vibe</h2>
-  <input type="text" id="vibe" placeholder="hurricane on a beach" autocomplete="off" spellcheck="false">
+  <h2>What are you feeling?</h2>
+  <input type="text" id="vibe" placeholder="hurricane on the beach" autocomplete="off" spellcheck="false">
   <div class="row" style="margin-top:12px;align-items:flex-end">
     <div style="flex:1 1 200px">
       <label class="f" for="genreSel">Stuck? Start from a genre</label>
@@ -248,7 +259,7 @@ details[open] summary{margin-bottom:12px}
 
 <!-- READING -->
 <section class="panel hidden" id="readPanel">
-  <h2>Reading</h2>
+  <h2>How it read that</h2>
   <div id="mixWrap"></div>
   <div class="readout" id="readout"></div>
   <div class="chips" id="chips"></div>
@@ -256,7 +267,7 @@ details[open] summary{margin-bottom:12px}
 
 <!-- SET -->
 <section class="panel hidden" id="setPanel">
-  <h2>Running order</h2>
+  <h2>Your playlist <button id="techToggle" class="linkbtn">details</button></h2>
   <div id="coverWrap" class="coverwrap hidden">
     <canvas id="cover" width="640" height="640"></canvas>
     <div>
@@ -274,9 +285,10 @@ details[open] summary{margin-bottom:12px}
   <div class="log" id="setLog"></div>
 </section>
 
-<p class="muted" style="margin-top:34px;font-size:12px;line-height:1.7">
-Audio features come from <a href="https://reccobeats.com" target="_blank" rel="noopener">ReccoBeats</a>. Spotify's own <code>/v1/audio-features</code> has returned 403 for new apps since 27 Nov 2024 and is never called here. New music comes from two places: seeded recommendations, and a search of the full Spotify catalog for the genres nearest your vibe. Tracks with no measured features are estimated from genre and marked <span class="est">est</span>.
-</p>
+<details style="margin-top:34px"><summary class="muted" style="font-size:12px">How this works</summary>
+<p class="muted" style="font-size:12px;line-height:1.7;margin-top:10px">
+Setlist reads your vibe as sound — tempo, energy, brightness, groove — and finds the songs that live there, checking each one's genre so a loud pop ballad can't sneak into a storm. Song data comes from <a href="https://reccobeats.com" target="_blank" rel="noopener">ReccoBeats</a>; cover photos are public-domain images from <a href="https://openverse.org" target="_blank" rel="noopener">Openverse</a>. Everything is cached in your browser and nothing is sent anywhere else.
+</p></details>
 
 <script>
 "use strict";
@@ -421,36 +433,167 @@ async function sp(path, opts = {}, retry = true){
 const FACTS = [
 'The chills you get from a great drop are dopamine — the same chemical as food and love.',
 'Your heartbeat drifts toward the tempo of what you\'re listening to.',
-'"Bohemian Rhapsody" has no chorus. It went to #1 twice anyway, 16 years apart.',
-'Songs get stuck in your head most when they\'re simple, repetitive, and slightly unusual. Sorry.',
-'The Beatles couldn\'t read sheet music. None of them.',
-'Danceability is measured from beat strength, regularity, and tempo — not from anyone dancing.',
-'Nirvana\'s "Smells Like Teen Spirit" was Kurt trying to write a Pixies song.',
-'Metallica is the first band to have played all seven continents. Yes, Antarctica.',
-'Streaming counts a play at 30 seconds. 31-second songs exist for exactly this reason.',
-'Valence is the industry word for how happy a song sounds, 0 to 1. Most metal sits under 0.3.',
-'The "Amen break" — six seconds of 1969 drums — is in thousands of songs; its drummer never saw a royalty.',
-'Dolly Parton wrote "Jolene" and "I Will Always Love You" on the same day.',
-'A minor key isn\'t automatically sad — most flamenco is minor and none of it is.',
-'"Weird Al" has never legally needed permission for a parody. He asks anyway, every time.',
-'Prince played all 27 instruments on his first album.',
-'Cows produce more milk to slow music than fast, per an actual study. R.E.M. beat AC/DC.',
-'Daft Punk\'s helmets cost about $65,000 each.',
-'Most pop choruses now hit inside the first 40 seconds. Streaming made intros expensive.',
-'Tempo detectors routinely report double or half the true BPM. This app checks all three.',
-'Playing an instrument lights up more of the brain at once than almost any other activity.',
-'The groove on a 12-inch vinyl LP, unwound, runs about half a kilometre.',
-'Queen\'s "We Will Rock You" beat is feet, hands, and reverb — no drums on it at all.',
-'Your music taste mostly locks in around age 13-14. Those songs stay lit forever.',
-'"Happy Birthday" was under copyright until 2016.',
-'Muzak was invented to make people less scared of elevators. They didn\'t trust them yet.',
+'Music lights up more regions of the brain at once than almost any other activity.',
+'About half of people regularly get goosebumps from music. The word for it is frisson.',
+'Sad songs trigger prolactin — a comfort hormone. Crying music literally soothes.',
+'Familiar songs can reach dementia patients when almost nothing else does.',
+'Stroke patients who can\'t speak can sometimes still sing — it\'s used in therapy.',
+'Faster music makes people drive faster. Studies keep confirming it.',
+'The right gym playlist measurably increases how long you can push.',
+'Slow music in stores makes shoppers linger and spend more. It\'s deliberate.',
 'Loud music makes drinks taste sweeter. Bars know this.',
+'Background music changes how food tastes — higher pitches read as sweeter.',
+'Babies move to rhythm before they can talk.',
+'Humans are among very few species that can keep a beat. Cockatoos can too.',
+'Songs get stuck in your head most when they\'re simple, repetitive, and slightly unusual. Sorry.',
+'Roughly nine in ten people get an earworm at least once a week.',
+'Your music taste mostly locks in around age 13-14. Those songs stay lit forever.',
+'People sing their favorite songs from memory surprisingly close to the real key and tempo.',
+'Perfect pitch is rare — about one in ten thousand — but more common among tonal-language speakers.',
+'Human hearing runs roughly 20Hz to 20kHz, and the top end fades every year you age.',
+'Teen-repellent alarms work because adults literally can\'t hear those frequencies anymore.',
+'Club sub-bass at the low end is felt in your chest more than heard.',
+'The infamous \'brown note\' was tested. It\'s a myth.',
+'Ringing ears after a loud show is damage, not an inconvenience. It adds up.',
+'Studies made music specifically for cats. Cats liked it. They ignore ours.',
+'The \'Mozart makes babies smarter\' effect never replicated. Mozart is still great.',
+'Musicians\' brains show a thicker bridge between the two hemispheres.',
+'Music is processed across both sides of the brain — the \'creative right brain\' story is too simple.',
+'MP3s work by throwing away sounds your ear would have masked anyway.',
+'Suzanne Vega\'s \'Tom\'s Diner\' was the test track for inventing the MP3. She\'s called the mother of the MP3.',
+'CDs sample at 44,100 times per second — just over double the highest pitch humans hear.',
+'Shazam matches songs from a fingerprint of spectrogram peaks, not the audio itself.',
+'Auto-Tune was invented by an oil-industry engineer repurposing seismic-data math.',
+'Cher\'s \'Believe\' is why audible Auto-Tune became a style instead of a secret.',
+'The Roland TR-808 drum machine flopped in stores, then quietly defined hip-hop forever.',
+'The \'loudness war\' squashed 2000s CDs flat. Streaming volume-matching finally ended it.',
+'Streaming platforms turn over-loud masters down automatically — crushing a mix gains nothing now.',
+'Tempo detectors routinely report double or half the true BPM. This app checks all three.',
+'Danceability is computed from beat strength and regularity — no dancing involved.',
+'Valence is the industry word for how happy a song sounds, 0 to 1. Most metal sits under 0.3.',
+'A streaming play counts at 30 seconds. Ultra-short songs exist for exactly this reason.',
+'Vinyl started outselling CDs again in the 2020s — first time since the late 80s.',
+'The groove on a 12-inch vinyl LP, unwound, runs about half a kilometre.',
+'The first commercially pressed CD was an ABBA album.',
+'The story goes that CD length was set so Beethoven\'s Ninth would fit on one disc.',
+'The \'Amen break\' — six seconds of 1969 drums — is in thousands of songs; its drummer never saw a royalty.',
+'That \'woo! yeah!\' in countless 90s tracks is Lyn Collins\' \'Think (About It)\', produced by James Brown.',
+'Clyde Stubblefield\'s \'Funky Drummer\' groove is one of the most sampled recordings ever made.',
+'James Brown fined his own band members mid-show for missed notes.',
+'Parliament-Funkadelic\'s stage mothership is in the Smithsonian.',
+'Queen\'s \'We Will Rock You\' beat is feet, hands, and reverb — no drums on it at all.',
+'\'Bohemian Rhapsody\' took weeks of vocal overdubs — some tape sections wore nearly transparent.',
+'Eddie Van Halen played the \'Beat It\' solo as an unpaid favor.',
+'The Beach Boys\' \'Good Vibrations\' was pieced together across studios over months — a single built like a film.',
+'Brian Wilson wrote Pet Sounds to answer Rubber Soul. Sgt. Pepper was written to answer Pet Sounds.',
+'\'Bitter Sweet Symphony\' royalties went to the Rolling Stones for 22 years before they gave them back.',
+'The \'Blurred Lines\' verdict made borrowing a vibe, not just a melody, legally dangerous.',
+'Radiohead\'s \'Creep\' shares credits with \'The Air That I Breathe\' after a similarity claim.',
+'A modern pop hit can list a dozen writers — interpolations mean everyone sampled gets a slice.',
+'Max Martin has quietly written or co-written more #1 hits than almost anyone since the Beatles.',
+'The Beatles couldn\'t read sheet music. None of them.',
+'Paul McCartney dreamed the melody of \'Yesterday\' and spent weeks asking if he\'d accidentally stolen it.',
+'\'Yesterday\' had a working title: \'Scrambled Eggs\'.',
+'\'Yesterday\' is among the most covered songs ever recorded.',
+'Frank Sinatra called \'Something\' his favorite Lennon-McCartney song. George Harrison wrote it.',
+'The Rolling Stones took their name from a Muddy Waters song.',
+'Led Zeppelin\'s name comes from a joke that the band would go down like a lead balloon.',
+'The Ramones weren\'t related — they all just adopted the surname.',
+'Black Sabbath named themselves after a horror movie playing across the street.',
+'Duran Duran is named after the villain in Barbarella.',
+'\'Smells Like Teen Spirit\' came from graffiti about a deodorant Kurt Cobain didn\'t know existed.',
+'Nirvana\'s \'Smells Like Teen Spirit\' was Kurt trying to write a Pixies song.',
+'David Bowie\'s mismatched eyes came from a childhood fight — one pupil stayed permanently open.',
+'Bowie turned down a knighthood.',
+'Jimi Hendrix once opened for The Monkees. It went about how you\'d imagine.',
+'Hendrix couldn\'t read music either.',
+'Left-handed, Hendrix played a right-handed Strat flipped upside down, restrung.',
+'Hendrix burned his guitar at Monterey and photos of it became rock scripture.',
+'Eric Clapton wrote \'Layla\' about his best friend George Harrison\'s wife.',
+'Prince played all 27 instruments on his first album.',
+'Prince changed his name to an unpronounceable symbol to fight his label.',
 'Freddie Mercury designed Queen\'s crest himself — he had an art degree.',
-'The longest officially released song runs over 13 hours.',
-'Humans can remember a familiar song from a clip a tenth of a second long.',
-'Left-handed, Hendrix played a right-handed Strat flipped upside down, restrung.'
+'Queen\'s Live Aid set is routinely voted the greatest 20 minutes in live music.',
+'Metallica is the first band to have played all seven continents. Yes, Antarctica.',
+'Dolly Parton wrote \'Jolene\' and \'I Will Always Love You\' on the same day.',
+'Willie Nelson\'s guitar Trigger has a hole worn clean through the body. He won\'t retire it.',
+'Johnny Cash\'s Folsom Prison concert — recorded inside the prison — revived his entire career.',
+'Elvis never performed a concert outside North America.',
+'Elvis\'s manager sold \'I Hate Elvis\' badges so he could profit off the haters too.',
+'Milli Vanilli had their Grammy taken back for not singing on their own record.',
+'Gorillaz have sold millions of records as a band of cartoon characters.',
+'Daft Punk\'s helmets cost about $65,000 each.',
+'ABBA\'s stage outfits were outrageous partly because Swedish tax law only deducted unwearable clothes.',
+'Rickrolling gave \'Never Gonna Give You Up\' a bigger second life than its first.',
+'Taylor Swift re-recorded her old albums to own the masters — and made the originals worth less overnight.',
+'BTS were the first K-pop act to top the main US albums chart.',
+'K-pop stars often train for years — dance, vocals, languages — before ever debuting.',
+'Wham!\'s \'Last Christmas\' finally hit UK #1 nearly four decades after release.',
+'Mariah Carey\'s Christmas song re-enters the #1 spot nearly every December like clockwork.',
+'\'Bohemian Rhapsody\' has no chorus. It went to #1 twice anyway, 16 years apart.',
+'Thriller is still the best-selling album of all time.',
+'Michael Jackson debuted the moonwalk during \'Billie Jean\' — one TV performance, instant history.',
+'The \'Thriller\' video is 14 minutes long and premiered like a movie.',
+'MTV\'s first-ever video was \'Video Killed the Radio Star\'.',
+'The Billboard Hot 100 launched in 1958.',
+'\'Old Town Road\' spent 19 weeks at #1 — the longest run in Hot 100 history.',
+'The best-selling single ever recorded is Bing Crosby\'s \'White Christmas\'.',
+'\'Jingle Bells\' was written for Thanksgiving, not Christmas.',
+'\'Jingle Bells\' was the first song performed in space — a harmonica prank on Gemini 6.',
+'\'Louie Louie\' was investigated by the FBI for obscene lyrics. Conclusion: unintelligible at any speed.',
+'\'Purple Haze\' gave the world its most famous misheard lyric: \'\'scuse me while I kiss this guy.\'',
+'The word for misheard lyrics — mondegreen — itself comes from a misheard folk song.',
+'The Star-Spangled Banner\'s melody began as an English gentlemen\'s-club drinking song.',
+'\'Twinkle Twinkle\', the alphabet song, and \'Baa Baa Black Sheep\' are all the same French melody.',
+'Mozart wrote variations on that melody. He also wrote his first symphony at eight.',
+'The oldest known instruments are bone flutes about 40,000 years old.',
+'The oldest written melody we can still play is a Hurrian hymn, roughly 3,400 years old.',
+'Do-re-mi comes from the opening syllables of lines in a Latin hymn.',
+'Orchestras tune to the oboe because its pitch is stable and cuts through everything.',
+'Concert pitch A440 wasn\'t standardized until the 20th century — old orchestras varied wildly.',
+'The composer Lully died conducting: he stabbed his own foot with his staff and refused amputation.',
+'Beethoven kept composing after going deaf, feeling vibrations through the piano.',
+'At his Ninth\'s premiere, Beethoven had to be turned around to see the applause he couldn\'t hear.',
+'\'Für Elise\' wasn\'t published until 40 years after Beethoven died. Nobody knows who Elise was.',
+'Bach had twenty children.',
+'Vivaldi was an ordained priest — the Red Priest, for his hair.',
+'Chopin\'s body is buried in Paris. His heart, at his request, is in Warsaw.',
+'Paganini played so well that audiences genuinely suspected a deal with the devil.',
+'Liszt\'s concerts caused \'Lisztomania\' — fans brawled over his gloves and broken piano strings.',
+'Castrati were the highest-paid pop stars of the Baroque era.',
+'Tchaikovsky\'s 1812 Overture is scored for actual cannons.',
+'Wagner\'s Ring cycle runs about fifteen hours across four nights.',
+'John Cage\'s 4\'33\\" is silence. Another Cage piece, playing now in Germany, is scheduled to last 639 years.',
+'A church organ in a Virginia cave plays actual stalactites. It spans three acres.',
+'Opera singers cut through a full orchestra using a resonance trick called the singer\'s formant.',
+'Gregorian chant was written down centuries before anyone notated rhythm.',
+'The piano\'s full name — pianoforte — literally means \'soft-loud\'. That was the innovation.',
+'A grand piano holds over 200 strings at around 20 tons of combined tension.',
+'Violin bows are strung with horsehair.',
+'In blind tests, top violinists often can\'t tell a Stradivarius from a good modern violin.',
+'The theremin is the only instrument played without touching it.',
+'The saxophone\'s inventor, Adolphe Sax, survived so many childhood accidents his mother gave him up for dead.',
+'Leo Fender designed the Stratocaster and Telecaster. He never learned to play guitar.',
+'Tuvan throat singers produce two notes at once from one voice.',
+'Yodeling is rapid switching between chest voice and head voice.',
+'There are whistled languages — entire conversations carried across valleys in Spain\'s Canary Islands.',
+'Hip-hop is usually dated to a single Bronx rec-room party in August 1973.',
+'Turntable scratching was reportedly discovered when a DJ stopped a record as his mom yelled at him.',
+'\'Rapper\'s Delight\' proved rap could chart. It was cut in a single take.',
+'Eminem\'s fastest verse clocks around seven and a half words per second.',
+'Muzak was invented to make people less scared of elevators. They didn\'t trust them yet.',
+'Cows produce more milk to slow music than fast, per an actual study. R.E.M. beat AC/DC.',
+'\'Weird Al\' has never legally needed permission for a parody. He asks anyway, every time.',
+'\'Happy Birthday\' was under copyright until 2016.',
+'The 27 Club: Hendrix, Joplin, Morrison, Cobain and Winehouse all died at the same age.',
+'Humans can recognize a familiar song from a clip a tenth of a second long.'
 ];
-let factTimer = null, factIdx = Math.floor(Math.random() * FACTS.length);
+/* Shuffled once per visit, so long waits walk a different route every time. */
+for(let i = FACTS.length - 1; i > 0; i--){
+  const j = Math.floor(Math.random() * (i + 1));
+  [FACTS[i], FACTS[j]] = [FACTS[j], FACTS[i]];
+}
+let factTimer = null, factIdx = 0;
 function factsOn(){
   if(factTimer) return;
   $('#factLine').classList.remove('hidden');
@@ -489,20 +632,22 @@ async function syncLibrary(incremental){
     }
     seen += page.items.length;
     progress(incremental ? Math.min(1, fresh.length / 50) : seen / Math.max(total,1));
-    libLog(incremental ? `Checking for new saves… ${fresh.length} new` : `Reading liked songs… ${seen} of ${total}`);
+    libLog(incremental ? `Checking for new saves… ${fresh.length} new` : `Loading your liked songs… ${seen} of ${total}`);
     url = page.next ? page.next.replace(API, '') : null;
     await sleep(60);
   }
 
   if(incremental){
     library = fresh.concat(library);
-    libLog(`${fresh.length} new track${fresh.length===1?'':'s'} added. ${library.length} total.`);
+    libLog(`${fresh.length} new song${fresh.length===1?'':'s'} found. ${library.length} total.`);
   }else{
     library = fresh;
-    libLog(`${library.length} liked song${library.length===1?'':'s'} loaded.`);
+    libLog(`${library.length} song${library.length===1?'':'s'} loaded.`);
   }
   save(K.lib, library);
   progress(0); busy(false); paint();
+  // one flow: loading music continues straight into listening to it
+  if(!abort && library.some(t => !(t.id in features))) await fetchFeatures();
 }
 
 let topNames = load(K.topn, {});
@@ -586,7 +731,7 @@ async function fetchFeatures(){
 
     done += chunk.length;
     progress(done / todo.length);
-    libLog(`Reading features… ${done} of ${todo.length} · ${got} covered`);
+    libLog(`Listening through your songs… ${done} of ${todo.length}`);
     if(done % 200 < RB_BATCH) save(K.feat, features);
     await sleep(RB_GAP);
   }
@@ -595,7 +740,7 @@ async function fetchFeatures(){
   const missing = library.filter(t => features[t.id] === null);
   progress(0);
   if(missing.length && !abort){
-    libLog(`${got} tracks read. ${missing.length} not covered — estimating those from artist genre.`);
+    libLog(`Almost there — filling in the last ${missing.length}…`);
     await genreFallback(missing);
   }
   busy(false);
@@ -619,7 +764,7 @@ async function loadAllGenres(){
     catch(e){ if(/session|sign/.test(e.message)) break; genres[id] = []; }
     n++;
     progress(n / need.length);
-    libLog(`Learning artist genres… ${n} of ${need.length} (one-time, resumable)`);
+    libLog(`Getting to know your artists… ${n} of ${need.length} (one-time)`);
     if(n % 40 === 0) save(K.gen, genres);
     await sleep(110);
   }
@@ -637,7 +782,7 @@ async function genreFallback(missing){
     catch(e){ genres[id] = []; }
     n++;
     progress(n / Math.max(need.length, 1));
-    libLog(`Looking up artist genres… ${n} of ${need.length}`);
+    libLog(`Checking artists… ${n} of ${need.length}`);
     if(n % 40 === 0) save(K.gen, genres);
     await sleep(110);
   }
@@ -650,7 +795,7 @@ async function genreFallback(missing){
   }
   save(K.feat, features);
   progress(0);
-  libLog(`${est} track${est===1?'':'s'} estimated from genre. Ready.`);
+  libLog('Done.');
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1831,17 +1976,14 @@ async function build(){
     const gotAll = current.seq.filter(t => t._cf && doesAll(t._cf)).length;
     const pct = current.seq.length ? Math.round(gotAll / current.seq.length * 100) : 0;
     const heardN = current.seq.filter(t => t.heardTag).length;
-    let msg = `${current.seq.length} track${current.seq.length===1?'':'s'} · ${gotMine - heardN} yours` +
-      (heardN ? `, ${heardN} heard` : '') + `, ${isNew} new`;
-    if(concepts.length > 1) msg += ` · ${pct}% do the whole vibe`;
-    const ts = current.seq.filter(t => t._ts !== undefined);
-    if(ts.length) msg += ` · ${Math.round(ts.reduce((a,t) => a + t._ts, 0) / ts.length * 100)}% like your library`;
+    let msg = `${current.seq.length} song${current.seq.length===1?'':'s'}: ${gotMine - heardN} from your library` +
+      (heardN ? `, ${heardN} you've heard` : '') + (isNew ? `, ${isNew} new to you` : '');
     msg += '.';
     if(current.seq.length < n){
-      msg += ` Only ${avail} track${avail===1?'':'s'} cleared the bar for ${n} slots — a shorter playlist or a broader vibe would fill it.`;
+      msg += ` That's every song that truly fits — a broader vibe would find more.`;
     }
     if(wantMine !== null && gotMine < wantMine - 1){
-      msg += ` Wanted ${wantMine} of yours but only ${gotMine} fit — your library ran out of matching tracks (max 2 per artist), so new ones filled the gap.`;
+      msg += ` Your library ran low on this vibe, so new songs filled the gap.`;
     }
     vibeLog(msg);
     $('#setPanel').scrollIntoView({ behavior:'smooth', block:'start' });
@@ -1904,13 +2046,16 @@ function renderSet(seq, concepts){
   $('#setPanel').classList.remove('hidden');
   $('#setList').innerHTML = seq.map(t => {
     const bpm = t.f.bpm ? Math.round(t.f.bpm) + ' bpm' : '—';
-    let tag = '';
+    const match = t._cf ? Math.round(t._cf[0] * 100) : null;
+    let tech = '';
     if(concepts.length > 1 && t._cf){
-      tag = concepts.map((c,i) => `<span style="color:${HUES[i%HUES.length]}">${esc(c.label.split(' ')[0])} ${Math.round(t._cf[i]*100)}</span>`).join(' ') + ' · ';
+      tech = concepts.map((c,i) => `<span style="color:${HUES[i%HUES.length]}">${esc(c.label.split(' ')[0])} ${Math.round(t._cf[i]*100)}</span>`).join(' ') + ' · ';
     }
+    const badges = (t.heardTag ? '<span class="pill heardp">heard</span>' : '')
+                 + (t.neu ? '<span class="pill newp">new</span>' : '');
     return `<li>
       <div><div class="t">${esc(t.name)}</div><div class="a">${esc(t.artists.map(a=>a.name).join(', '))}</div></div>
-      <div class="m">${tag}${bpm}${t.f.est ? ' · <span class="est">est</span>' : ''}${t._ts !== undefined ? ' · you ' + Math.round(t._ts*100) : ''}${t.heardTag ? ' · <span class="neu">heard</span>' : ''}${t.neu ? ' · <span class="neu">new</span>' : ''}</div>
+      <div class="m">${badges}${match !== null ? `<span class="pill">${match}%</span>` : ''}<span class="tech">${tech}${bpm}${t.f.est ? ' · <span class="est">estimated</span>' : ''}${t._ts !== undefined ? ' · you ' + Math.round(t._ts*100) : ''}</span></div>
     </li>`;
   }).join('');
   $('#setLog').textContent = '';
@@ -2246,6 +2391,7 @@ function busy(on){
 
 function paint(){
   const authed = !!tokens;
+  $('#setupPanel').classList.toggle('hidden', authed);
   $('#libPanel').classList.toggle('hidden', !authed);
   $('#forget').classList.toggle('hidden', !authed);
   $('#connect').textContent = authed ? 'Reconnect' : 'Connect Spotify';
@@ -2257,7 +2403,7 @@ function paint(){
 
   const read = library.filter(t => features[t.id]).length;
   $('#vibePanel').classList.toggle('hidden', !(authed && read >= 5));
-  $('#cacheInfo').innerHTML = `${library.length} tracks · ${read} with a reading · ${Object.keys(features).length} looked up · ${Object.keys(genres).length} artists cached`;
+  $('#cacheInfo').innerHTML = `${library.length} songs · ${read} ready to use. Everything is stored in this browser only.`;
   if(has && read === 0) libLog(`${library.length} tracks loaded. Next: read audio features.`);
 }
 
@@ -2269,6 +2415,7 @@ $('#copyRedir').onclick = async () => {
 $('#clientId').value = clientId;
 $('#clientId').oninput = e => { clientId = e.target.value.trim(); save(K.cid, clientId); };
 $('#connect').onclick = beginAuth;
+$('#forget2').onclick = () => $('#forget').onclick();
 $('#forget').onclick = () => {
   [K.tok, K.top].forEach(k => localStorage.removeItem(k));
   tokens = null; topArt = null; paint(); note('Signed out. Your library cache is still here.');
@@ -2304,6 +2451,7 @@ document.querySelectorAll('#srcSeg button').forEach(b => {
   };
 });
 $('#createBtn').onclick = createPlaylist;
+$('#techToggle').onclick = () => document.body.classList.toggle('showtech');
 $('#reroll').onclick = () => { if(current) makeCover(current.concepts, current.text, true); };
 $('#vibe').addEventListener('keydown', e => { if(e.key === 'Enter') build(); });
 $('#lenSlider').oninput = e => $('#lenVal').textContent = e.target.value + ' tracks';
