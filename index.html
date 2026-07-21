@@ -135,6 +135,12 @@ ol.set .t{font-weight:500;color:#eef0f6}
 ol.set .a{color:var(--dim);font-size:13px}
 ol.set .m{font-family:'DM Mono',monospace;font-size:10px;color:#5c6478;text-align:right;white-space:nowrap}
 .est{color:var(--sodium)}
+.neu{color:var(--seaglass)}
+.seg{display:inline-flex;border:1px solid var(--haze);border-radius:var(--r);overflow:hidden}
+.seg button{border:0;border-radius:0;background:transparent;padding:9px 15px;font-size:13px;color:var(--dim)}
+.seg button + button{border-left:1px solid var(--haze)}
+.seg button.on{background:var(--sodium);color:#20160a;font-weight:600}
+.seg button:hover:not(.on){background:#232838}
 
 .notice{border-left:2px solid var(--sodium);padding:10px 0 10px 14px;margin:14px 0;font-size:13px;color:var(--dim)}
 .notice.err{border-color:var(--bad);color:#e9b3a4}
@@ -158,12 +164,14 @@ details[open] summary{margin-bottom:12px}
 <section class="panel" id="setupPanel">
   <h2>Setup</h2>
   <div id="originWarn" class="notice err hidden"></div>
-  <p class="muted" style="margin-top:0">One-time. Create an app in the Spotify dashboard, register the redirect URI below exactly as written, then paste the Client ID here. Nothing leaves your browser.</p>
+  <p class="muted" style="margin-top:0">Client ID is already filled in. Just press Connect.</p>
+  <details style="margin-bottom:18px"><summary>Change the app it connects to</summary>
   <p style="margin:14px 0 6px"><span class="muted">Redirect URI to register</span><br><code id="redirUri"></code>
     <button id="copyRedir" style="padding:4px 10px;font-size:12px;margin-left:6px">Copy</button></p>
-  <p class="muted" style="margin-bottom:18px">Open the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">Spotify developer dashboard</a> → Create app → set Redirect URI → choose <b>Web API</b> → save, then copy the Client ID.</p>
+  <p class="muted" style="margin-bottom:14px">Open the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">Spotify developer dashboard</a> → Create app → set Redirect URI → choose <b>Web API</b> → save, then copy the Client ID.</p>
   <label class="f" for="clientId">Client ID</label>
   <input type="text" id="clientId" placeholder="32 hex characters" autocomplete="off" spellcheck="false">
+  </details>
   <div class="row" style="margin-top:14px">
     <button class="primary" id="connect">Connect Spotify</button>
     <button id="forget" class="hidden">Sign out</button>
@@ -196,6 +204,14 @@ details[open] summary{margin-bottom:12px}
   <h2>The vibe</h2>
   <input type="text" id="vibe" placeholder="hurricane on a beach" autocomplete="off" spellcheck="false">
   <div class="spread" style="margin-top:22px">
+    <div style="flex:1 1 100%">
+      <label class="f">Where songs come from</label>
+      <div class="seg" id="srcSeg">
+        <button data-src="lib" class="on">My library</button>
+        <button data-src="both">Both</button>
+        <button data-src="new">New to me</button>
+      </div>
+    </div>
     <div>
       <div class="rangehead"><label class="f" for="lenSlider" style="margin:0">Length</label><b id="lenVal">25 tracks</b></div>
       <input type="range" id="lenSlider" min="5" max="80" step="1" value="25">
@@ -233,7 +249,7 @@ details[open] summary{margin-bottom:12px}
 </section>
 
 <p class="muted" style="margin-top:34px;font-size:12px;line-height:1.7">
-Audio features come from <a href="https://reccobeats.com" target="_blank" rel="noopener">ReccoBeats</a>. Spotify's own <code>/v1/audio-features</code> has returned 403 for new apps since 27 Nov 2024 and is never called here. Tracks ReccoBeats doesn't cover are estimated from artist genre and marked <span class="est">est</span>.
+Audio features come from <a href="https://reccobeats.com" target="_blank" rel="noopener">ReccoBeats</a>. Spotify's own <code>/v1/audio-features</code> has returned 403 for new apps since 27 Nov 2024 and is never called here. New music comes from two places: seeded recommendations, and a search of the full Spotify catalog for the genres nearest your vibe. Tracks with no measured features are estimated from genre and marked <span class="est">est</span>.
 </p>
 
 <script>
@@ -242,13 +258,16 @@ Audio features come from <a href="https://reccobeats.com" target="_blank" rel="n
    CONFIG
    ═══════════════════════════════════════════════════════════════════ */
 const REDIRECT_URI = 'https://dfuzzy69.github.io/setlist/';
+/* Baked in so the app just works on load. Safe to publish: with PKCE there is no
+   client secret, and this ID is already visible in the authorize URL. */
+const DEFAULT_CLIENT_ID = 'dbf692a6a9274e3d886495166c4f5116';
 const SCOPES = 'user-library-read playlist-modify-private playlist-modify-public user-top-read';
 const API   = 'https://api.spotify.com/v1';
 const RECCO = 'https://api.reccobeats.com/v1';
 const AUTH  = 'https://accounts.spotify.com/authorize';
 const TOKEN = 'https://accounts.spotify.com/api/token';
 
-const K = { cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', ver:'sl.pkce', st:'sl.state' };
+const K = { cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
 
 const $ = s => document.querySelector(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -262,7 +281,7 @@ function save(k, v){
   catch(e){ note('Local storage is full. Clear the feature cache and try again.', true); return false; }
 }
 
-let clientId = load(K.cid, '');
+let clientId = load(K.cid, '') || DEFAULT_CLIENT_ID;
 let tokens   = load(K.tok, null);
 let library  = load(K.lib, []);       // [{id,name,artists:[{id,name}],added_at}]
 let features = load(K.feat, {});      // spotifyId -> {t,e,v,d,a,i,s,l,est} | null(=no coverage)
@@ -526,6 +545,130 @@ async function genreFallback(missing){
   save(K.feat, features);
   progress(0);
   libLog(`${est} track${est===1?'':'s'} estimated from genre. Ready.`);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   NEW MUSIC  —  ReccoBeats /v1/track/recommendation
+   Spotify's own /v1/recommendations died Nov 2024; related-artists and
+   artist-top-tracks went in Feb 2026. This is the remaining free route.
+   ═══════════════════════════════════════════════════════════════════ */
+let discovered = load(K.disc, {});   // spotifyId -> {id,name,artists,f}
+
+function recTrack(row){
+  const href = row.href || row.trackHref || '';
+  const m = /([A-Za-z0-9]{22})/.exec(href.split('/').pop() || '');
+  const id = m ? m[1] : null;
+  if(!id) return null;
+  const name = row.trackTitle || row.title || row.name || '';
+  let artists = [];
+  if(Array.isArray(row.artists)){
+    artists = row.artists.map(a => typeof a === 'string'
+      ? { id:'x:'+a, name:a }
+      : { id: a.id || ('x:'+(a.name||'')), name: a.name || '' });
+  }else if(typeof row.artist === 'string'){
+    artists = [{ id:'x:'+row.artist, name:row.artist }];
+  }
+  if(!name || !artists.length) return null;
+  return { id, name, artists };
+}
+
+async function recommend(seedIds, concept, size){
+  const p = new URLSearchParams();
+  seedIds.slice(0,5).forEach(s => p.append('seeds', s));
+  p.append('size', String(size));
+  // Old Spotify-style targets. Ignored if unsupported, helpful if not.
+  const map = { e:'energy', v:'valence', d:'danceability', a:'acousticness', i:'instrumentalness', s:'speechiness', l:'liveness' };
+  for(const d in map) if(concept.vec[d] !== undefined) p.append('target_' + map[d], concept.vec[d].toFixed(2));
+  if(concept.vec.t !== undefined) p.append('target_tempo', Math.round(60 + concept.vec.t * 120));
+
+  try{
+    const r = await fetch(`${RECCO}/track/recommendation?${p}`);
+    if(!r.ok) return [];
+    const j = await r.json();
+    const rows = Array.isArray(j.content) ? j.content : (Array.isArray(j) ? j : []);
+    return rows.map(recTrack).filter(Boolean);
+  }catch(e){ return []; }
+}
+
+/* Nearest genres to a vibe, measured in the same 8 dimensions as everything else. */
+function nearestGenres(vec, n){
+  return Object.keys(GENRE_VEC)
+    .map(g => ({ g, d: 1 - fit(vec, GENRE_VEC[g]) }))
+    .sort((a,b) => a.d - b.d).slice(0, n).map(x => x.g);
+}
+
+/* Spotify catalog search — the whole catalog, not a third-party subset.
+   Search limit dropped to 10 per request in Feb 2026, so we page for volume. */
+async function catalogSearch(concept, want){
+  const out = new Map();
+  const gs = nearestGenres(concept.vec, 3);
+  for(const g of gs){
+    const est = { ...GENRE_VEC[g], est:true, bpm:null };
+    for(const d of DIMS) if(est[d] === undefined) est[d] = null;
+    const jump = Math.floor(Math.random() * 25) * 10;   // vary results between builds
+    for(let page = 0; page < 4; page++){
+      const q = encodeURIComponent(`genre:"${g}"`);
+      let r;
+      try{ r = await sp(`/search?q=${q}&type=track&limit=10&offset=${jump + page*10}`); }
+      catch(e){ break; }
+      const items = r?.tracks?.items || [];
+      if(!items.length) break;
+      for(const t of items){
+        if(!t.id || out.has(t.id)) continue;
+        out.set(t.id, {
+          id: t.id, name: t.name,
+          artists: (t.artists||[]).map(a => ({ id:a.id, name:a.name })),
+          _est: est
+        });
+      }
+      if(out.size >= want * 4) break;
+      await sleep(90);
+    }
+  }
+  return [...out.values()];
+}
+
+async function findNew(concepts, ranked, want){
+  const have = new Set(library.map(t => t.id));
+  const found = new Map();
+
+  for(let c = 0; c < concepts.length; c++){
+    // 1. seeded recommendations — precise, smaller catalog
+    const seeds = (ranked[c] || []).slice(0, 5).map(r => r.t.id);
+    if(seeds.length){
+      vibeLog(`Finding music like your best matches for “${concepts[c].label}”…`);
+      for(const t of await recommend(seeds, concepts[c], Math.max(40, want)))
+        if(!have.has(t.id) && !found.has(t.id)) found.set(t.id, t);
+      await sleep(RB_GAP);
+    }
+    // 2. Spotify catalog by nearest genre — broad
+    vibeLog(`Searching the Spotify catalog for “${concepts[c].label}”…`);
+    for(const t of await catalogSearch(concepts[c], want))
+      if(!have.has(t.id) && !found.has(t.id)) found.set(t.id, t);
+  }
+  if(!found.size) return [];
+
+  const list = [...found.values()];
+  const need = list.map(t => t.id).filter(id => !discovered[id]);
+  for(let i = 0; i < need.length; i += RB_BATCH){
+    const chunk = need.slice(i, i + RB_BATCH);
+    const rows = await rb(chunk);
+    for(const row of rows){
+      const m = /([A-Za-z0-9]{22})/.exec((row.href||'').split('/').pop() || '');
+      if(!m) continue;
+      const f = normFeat(row);
+      const meta = found.get(m[1]);
+      if(f && meta) discovered[m[1]] = { id:meta.id, name:meta.name, artists:meta.artists, f };
+    }
+    vibeLog(`Reading new tracks… ${Math.min(i+RB_BATCH, need.length)} of ${need.length}`);
+    await sleep(RB_GAP);
+  }
+  // Anything ReccoBeats missed still counts if we found it by genre — we know the genre.
+  for(const t of list){
+    if(!discovered[t.id] && t._est) discovered[t.id] = { id:t.id, name:t.name, artists:t.artists, f:t._est };
+  }
+  save(K.disc, discovered);
+  return list.map(t => discovered[t.id]).filter(Boolean).map(t => ({ ...t, neu:true }));
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -941,9 +1084,9 @@ function sequence(list){
 /* ═══════════════════════════════════════════════════════════════════
    BUILD
    ═══════════════════════════════════════════════════════════════════ */
-let current = null;
+let current = null, source = 'lib';
 
-function build(){
+async function build(){
   const text = $('#vibe').value.trim();
   if(!text) return vibeLog('Type a vibe first.');
   const { concepts, unknown, matched } = parseVibe(text);
@@ -954,20 +1097,41 @@ function build(){
     return vibeLog('None of those words are in the lexicon yet. Try a place, a weather, a time of day, or a feeling.');
   }
   recount();
-  const pool = library.map(t => ({ ...t, f: features[t.id] })).filter(t => t.f);
-  if(pool.length < 5) return vibeLog('Not enough tracks have a reading yet. Run "Read audio features" first.');
+  const mine = library.map(t => ({ ...t, f: features[t.id] })).filter(t => t.f);
+  if(mine.length < 5) return vibeLog('Not enough tracks have a reading yet. Run "Read audio features" first.');
 
   const n = parseInt($('#lenSlider').value, 10);
   const disc = parseInt($('#discSlider').value, 10) / 100;
-  const ranked = concepts.map(c => rankFor(c, pool, disc));
-  const picked = interleave(ranked, concepts.map(c => c.weight), n);
-  current = { seq: sequence(picked), concepts, text };
+  $('#buildBtn').disabled = true;
 
-  renderReading(concepts, matched, unknown);
-  renderSet(current.seq, concepts);
-  $('#plName').value = text.replace(/\b\w/g, m => m.toUpperCase());
-  vibeLog(`${current.seq.length} track${current.seq.length===1?'':'s'} from ${pool.length} readable.`);
-  $('#setPanel').scrollIntoView({ behavior:'smooth', block:'start' });
+  try{
+    let pool = mine;
+    if(source !== 'lib'){
+      const seedRanks = concepts.map(c => rankFor(c, mine, 0.5));
+      const fresh = await findNew(concepts, seedRanks, n);
+      if(!fresh.length){
+        vibeLog(source === 'new'
+          ? 'No new tracks came back. Try a different vibe, or switch back to My library.'
+          : 'No new tracks came back — building from your library only.');
+        if(source === 'new'){ $('#buildBtn').disabled = false; return; }
+      }
+      pool = source === 'new' ? (fresh.length ? fresh : mine) : mine.concat(fresh);
+    }
+
+    const ranked = concepts.map(c => rankFor(c, pool, disc));
+    const picked = interleave(ranked, concepts.map(c => c.weight), n);
+    current = { seq: sequence(picked), concepts, text };
+
+    renderReading(concepts, matched, unknown);
+    renderSet(current.seq, concepts);
+    $('#plName').value = text.replace(/\b\w/g, m => m.toUpperCase());
+    const fresh = current.seq.filter(t => t.neu).length;
+    vibeLog(`${current.seq.length} track${current.seq.length===1?'':'s'}${fresh ? ` · ${fresh} new to you` : ''}.`);
+    $('#setPanel').scrollIntoView({ behavior:'smooth', block:'start' });
+  }catch(e){
+    vibeLog('Build failed: ' + e.message);
+  }
+  $('#buildBtn').disabled = false;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1027,7 +1191,7 @@ function renderSet(seq, concepts){
       ? `<span style="color:${HUES[t._c%HUES.length]}">${esc(concepts[t._c].label.split(' ')[0])}</span> · ` : '';
     return `<li>
       <div><div class="t">${esc(t.name)}</div><div class="a">${esc(t.artists.map(a=>a.name).join(', '))}</div></div>
-      <div class="m">${tag}${bpm}${t.f.est ? ' · <span class="est">est</span>' : ''}</div>
+      <div class="m">${tag}${bpm}${t.f.est ? ' · <span class="est">est</span>' : ''}${t.neu ? ' · <span class="neu">new</span>' : ''}</div>
     </li>`;
   }).join('');
   $('#setLog').textContent = '';
@@ -1121,6 +1285,13 @@ $('#stopBtn').onclick   = () => { abort = true; libLog('Stopped. Progress is sav
 $('#clearFeat').onclick = () => { features = {}; genres = {}; save(K.feat,{}); save(K.gen,{}); paint(); libLog('Feature cache cleared.'); };
 $('#clearAll').onclick  = () => { Object.values(K).forEach(k => localStorage.removeItem(k)); location.reload(); };
 $('#buildBtn').onclick  = build;
+document.querySelectorAll('#srcSeg button').forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll('#srcSeg button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on'); source = b.dataset.src;
+    vibeLog(source === 'lib' ? '' : 'New music is fetched when you build — first run takes a few seconds.');
+  };
+});
 $('#createBtn').onclick = createPlaylist;
 $('#vibe').addEventListener('keydown', e => { if(e.key === 'Enter') build(); });
 $('#lenSlider').oninput = e => $('#lenVal').textContent = e.target.value + ' tracks';
