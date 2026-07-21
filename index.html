@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 31</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 32</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -400,7 +400,7 @@ async function refresh(){
   storeTokens(j);
 }
 
-async function sp(path, opts = {}, retry = true){
+async function sp(path, opts = {}, retry = true, tries = 0){
   if(!tokens) throw new Error('not signed in');
   if(Date.now() > tokens.exp) await refresh();
   // Content-Type on a GET forces a CORS preflight for no reason — only send it with a body.
@@ -411,13 +411,17 @@ async function sp(path, opts = {}, retry = true){
   try{
     r = await fetch(API + path, { ...opts, headers });
   }catch(e){
-    if(retry){ await sleep(1200); return sp(path, opts, false); }
+    if(retry){ await sleep(1200); return sp(path, opts, false, tries); }
     throw new Error('Could not reach Spotify. Check your connection, and any content blocker or Lockdown Mode that might be blocking api.spotify.com.');
   }
   if(r.status === 401 && retry){ await refresh(); return sp(path, opts, false); }
   if(r.status === 429){
-    const wait = (parseInt(r.headers.get('Retry-After') || '2', 10) + 1) * 1000;
-    await sleep(wait); return sp(path, opts, retry);
+    /* Spotify's Retry-After can be minutes. Never wait silently, never wait
+       forever — say so, cap it, and give up with a clear message. */
+    if(tries >= 5) throw new Error('Spotify is rate-limiting right now. Wait a few minutes, then press Continue setup — nothing is lost.');
+    const wait = Math.min((parseInt(r.headers.get('Retry-After') || '2', 10) + 1) * 1000, 30000);
+    try{ libLog(`Spotify asked us to slow down — waiting ${Math.round(wait/1000)}s…`); }catch(e){}
+    await sleep(wait); return sp(path, opts, retry, tries + 1);
   }
   if(r.status === 403) throw new Error('Spotify 403 — add your own account under Users and access in the app dashboard.');
   if(!r.ok){
@@ -757,20 +761,29 @@ async function loadAllGenres(){
   const need = [...new Set(library.flatMap(t => t.artists.map(a => a.id)).filter(id => id && !(id in genres)))];
   if(!need.length) return;
   busy(true);
-  let n = 0;
-  for(const id of need){
-    if(abort) break;
-    try{ const a = await sp('/artists/' + id); genres[id] = a.genres || []; }
-    catch(e){ if(/session|sign/.test(e.message)) break; genres[id] = []; }
-    n++;
-    progress(n / need.length);
-    libLog(`Getting to know your artists… ${n} of ${need.length} (one-time)`);
-    if(n % 40 === 0) save(K.gen, genres);
-    await sleep(110);
+  libLog(`Getting to know your artists… 0 of ${need.length} (one-time)`);
+  let n = 0, halted = null;
+  try{
+    for(const id of need){
+      if(abort) break;
+      try{ const a = await sp('/artists/' + id); genres[id] = a.genres || []; }
+      catch(e){
+        if(/rate-limiting|session|sign/.test(e.message)){ halted = e.message; break; }
+        genres[id] = [];
+      }
+      n++;
+      progress(n / need.length);
+      libLog(`Getting to know your artists… ${n} of ${need.length} (one-time)`);
+      if(n % 40 === 0) save(K.gen, genres);
+      await sleep(320);
+    }
+  }finally{
+    save(K.gen, genres);
+    progress(0); busy(false);
+    libLog(halted ? halted
+         : abort ? 'Stopped — progress saved. Press Continue setup to pick up where you left off.'
+         : 'All set.');
   }
-  save(K.gen, genres);
-  progress(0); busy(false);
-  libLog(abort ? 'Stopped — progress saved. Press "Read audio features" to continue.' : 'Artist genres learned. Ready.');
 }
 
 async function genreFallback(missing){
@@ -779,12 +792,12 @@ async function genreFallback(missing){
   for(const id of need){
     if(abort) break;
     try{ const a = await sp('/artists/' + id); genres[id] = a.genres || []; }
-    catch(e){ genres[id] = []; }
+    catch(e){ if(/rate-limiting|session/.test(e.message)){ libLog(e.message); break; } genres[id] = []; }
     n++;
     progress(n / Math.max(need.length, 1));
     libLog(`Checking artists… ${n} of ${need.length}`);
     if(n % 40 === 0) save(K.gen, genres);
-    await sleep(110);
+    await sleep(320);
   }
   save(K.gen, genres);
   let est = 0;
