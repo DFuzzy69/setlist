@@ -158,7 +158,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 10</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 14</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -213,6 +213,20 @@ details[open] summary{margin-bottom:12px}
         <button data-src="lib" class="on">My library</button>
         <button data-src="both">Both</button>
         <button data-src="new">New to me</button>
+      </div>
+    </div>
+    <div style="flex:1 1 100%">
+      <label class="f">Match quality</label>
+      <div class="seg" id="strictSeg">
+        <button data-strict="1" class="on">Strong matches only</button>
+        <button data-strict="0">Always fill the playlist</button>
+      </div>
+    </div>
+    <div style="flex:1 1 100%">
+      <label class="f">Multi-part vibes</label>
+      <div class="seg" id="blendSeg">
+        <button data-blend="fuse" class="on">Every song does both</button>
+        <button data-blend="alt">Some of each</button>
       </div>
     </div>
     <div style="flex:1 1 100%">
@@ -287,7 +301,7 @@ const RECCO = 'https://api.reccobeats.com/v1';
 const AUTH  = 'https://accounts.spotify.com/authorize';
 const TOKEN = 'https://accounts.spotify.com/api/token';
 
-const K = { pho:'sl.pho', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
+const K = { pho:'sl.pho2', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
 
 const $ = s => document.querySelector(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -860,7 +874,7 @@ for(const keys in RAW){
     const m = /^([tevdaisl])(-?[\d.]+)$/.exec(parts[i]);
     if(m) vec[m[1]] = parseFloat(m[2]);
   }
-  keys.split('|').forEach(w => { LEX[w] = { pos, vec, label: keys.split('|')[0] }; });
+  keys.split('|').forEach(w => { LEX[w] = { pos, vec, label: keys.split('|')[0], group: keys.split('|') }; });
 }
 
 /* genre keyword → sonic centre, for tracks ReccoBeats doesn't cover */
@@ -1036,17 +1050,30 @@ function recount(){
   for(const t of library) for(const a of t.artists) artistCount[a.id] = (artistCount[a.id]||0) + 1;
 }
 
+/* Not all dimensions carry equal weight for "does this feel right".
+   Energy and brightness dominate perception; liveness and speechiness barely
+   register. Tempo is downweighted because detectors routinely report half or
+   double the true value — which is also why it's matched octave-invariantly. */
+const DIM_W = { t:0.9, e:1.5, v:1.5, d:1.1, a:1.0, i:0.6, s:0.6, l:0.5 };
+
 function fit(vec, f){
   let sum = 0, wt = 0;
   for(const d in vec){
     if(f[d] === null || f[d] === undefined) continue;
-    const w = (d === 't' || d === 'e' || d === 'v') ? 1.35 : 1.0;   // the dimensions people actually hear
-    const diff = vec[d] - f[d];
+    let diff;
+    if(d === 't' && f.bpm){
+      // 70bpm and 140bpm are the same feel to a listener and to a bad detector
+      const cands = [f.bpm, f.bpm * 2, f.bpm / 2]
+        .map(b => Math.max(0, Math.min(1, (b - 60) / 120)));
+      diff = Math.min(...cands.map(x => Math.abs(vec.t - x)));
+    }else{
+      diff = vec[d] - f[d];
+    }
+    const w = DIM_W[d] || 1;
     sum += w * diff * diff; wt += w;
   }
   if(!wt) return 0;
-  const rms = Math.sqrt(sum / wt);
-  return Math.max(0, 1 - rms * 1.45);
+  return Math.max(0, 1 - Math.sqrt(sum / wt) * 1.45);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1092,6 +1119,56 @@ function langAllowed(t){
   if(langPref !== 'strict') return true;
   const l = langOf(t);
   return l === 'en' || l === 'es';
+}
+
+/* Two ways to handle a multi-concept vibe.
+   FUSE: weighted geometric mean of each concept's fit. Being strong on one
+   and weak on another is punished hard, so what survives satisfies both —
+   an actual hurricane-on-a-beach track, not a hurricane track next to a
+   beach track. Arithmetic averaging would instead reward the midpoint,
+   which is neither thing.
+   ALTERNATE: the old behaviour, each concept ranked on its own. */
+let blendMode = 'fuse';
+let strictMatch = true;
+
+function conceptFits(concepts, f){ return concepts.map(c => fit(c.vec, f)); }
+
+function fuse(concepts, f){
+  let s = 0;
+  for(let i = 0; i < concepts.length; i++){
+    const x = Math.max(fit(concepts[i].vec, f), 0.05);   // floor, or one miss zeroes it
+    s += concepts[i].weight * Math.log(x);
+  }
+  return Math.exp(s);
+}
+
+function adjust(t, base, disc){
+  const bias = (disc - 0.5) * 2;
+  let pen = 0;
+  if(t.f.est){
+    let h = 0; for(let i = 0; i < t.id.length; i++) h = (h * 31 + t.id.charCodeAt(i)) >>> 0;
+    pen = 0.13 + (h % 1000) / 1000 * 0.07;
+  }
+  return base - bias * familiarity(t) * 0.30 - pen + langBonus(t);
+}
+
+/* One ranked list for a whole source, every concept satisfied at once. */
+function rankFused(concepts, pool, disc){
+  return pool.filter(langAllowed).map(t => {
+    const raw = fuse(concepts, t.f);
+    return { t, raw, s: adjust(t, raw, disc), cf: conceptFits(concepts, t.f) };
+  }).sort((a,b) => b.s - a.s);
+}
+
+/* Only keep tracks close to the best match this vibe can actually reach.
+   A fixed cutoff would be wrong — "rage" tops out near 0.87, "hurricane on a
+   beach" near 0.73 — so the bar is relative to what's achievable. */
+const MATCH_SPREAD = 0.11;
+function applyFloor(streams){
+  let best = 0;
+  streams.forEach(st => st.forEach(r => { if(r.raw > best) best = r.raw; }));
+  const floor = best - MATCH_SPREAD;
+  return streams.map(st => st.filter(r => r.raw === undefined || r.raw >= floor));
 }
 
 function rankFor(concept, pool, disc){
@@ -1146,7 +1223,7 @@ function interleave(ranked, weights, n, maxPerArtist = 2, quotas = null){
     const aid = tr.artists[0] ? tr.artists[0].id : tr.id;
     if((byArtist[aid]||0) >= maxPerArtist) continue;
     seen.add(tr.id); byArtist[aid] = (byArtist[aid]||0) + 1; taken[pick]++;
-    out.push({ ...tr, _c: pick, _s: row.s });
+    out.push({ ...tr, _c: pick, _s: row.s, _cf: row.cf });
   }
   out.taken = taken;
   return out;
@@ -1194,11 +1271,13 @@ async function build(){
 
   try{
     let streams, weights, streamConcept, quotas = null, wantMine = null;
+    const fused = blendMode === 'fuse' || concepts.length === 1;
+    const rankSrc = pool => fused ? [rankFused(concepts, pool, disc)] : concepts.map(c => rankFor(c, pool, disc));
+    const wtOf   = scale => fused ? [scale] : concepts.map(c => c.weight * scale);
+    const cIdx   = () => fused ? [0] : concepts.map((c,i) => i);
 
     if(source === 'lib'){
-      const ranked = concepts.map(c => rankFor(c, mine, disc));
-      streams = ranked; weights = concepts.map(c => c.weight);
-      streamConcept = concepts.map((c,i) => i);
+      streams = rankSrc(mine); weights = wtOf(1); streamConcept = cIdx();
     }else{
       const seedRanks = concepts.map(c => rankFor(c, mine, 0.5));
       const fresh = await findNew(concepts, seedRanks, n);
@@ -1209,33 +1288,27 @@ async function build(){
         if(source === 'new'){ $('#buildBtn').disabled = false; return; }
       }
       if(source === 'new' && fresh.length){
-        const ranked = concepts.map(c => rankFor(c, fresh, 0.5));
-        streams = ranked; weights = concepts.map(c => c.weight);
-        streamConcept = concepts.map((c,i) => i);
+        streams = rankSrc(fresh); weights = wtOf(1); streamConcept = cIdx();
       }else if(!fresh.length){
-        const ranked = concepts.map(c => rankFor(c, mine, disc));
-        streams = ranked; weights = concepts.map(c => c.weight);
-        streamConcept = concepts.map((c,i) => i);
+        streams = rankSrc(mine); weights = wtOf(1); streamConcept = cIdx();
       }else{
-        /* Both: the slider is the mix ratio, not a nudge. Middle means half and half.
-           Two streams per concept, each with a hard quota, so the split is exact. */
-        streams = []; weights = []; streamConcept = [];
-        const quotaOf = [];
-        concepts.forEach((c, i) => {
-          if(disc < 1){ streams.push(rankFor(c, mine, 0.5));  weights.push(c.weight*(1-disc)); streamConcept.push(i); quotaOf.push(c.weight*(1-disc)); }
-          if(disc > 0){ streams.push(rankFor(c, fresh, 0.5)); weights.push(c.weight*disc);     streamConcept.push(i); quotaOf.push(c.weight*disc); }
-        });
-        // largest remainder, so the quotas sum to exactly n
-        const raw = quotaOf.map(w => w * n);
+        /* Both: the slider is the mix ratio, not a nudge. Middle means half and half. */
+        const a = rankSrc(mine), b = rankSrc(fresh);
+        streams = a.concat(b);
+        weights = wtOf(1 - disc).concat(wtOf(disc));
+        streamConcept = cIdx().concat(cIdx());
+        const raw = weights.map(w => w * n);
         quotas = raw.map(Math.floor);
-        let left = n - quotas.reduce((a,b) => a+b, 0);
-        raw.map((v,i) => ({ i, r: v - Math.floor(v) })).sort((a,b) => b.r - a.r)
+        let left = n - quotas.reduce((x,y) => x+y, 0);
+        raw.map((v,i) => ({ i, r: v - Math.floor(v) })).sort((x,y) => y.r - x.r)
            .forEach(x => { if(left > 0){ quotas[x.i]++; left--; } });
-        wantMine = quotas.filter((q,i) => !streams[i].some(r => r.t.neu)).reduce((a,b) => a+b, 0);
+        wantMine = quotas.slice(0, a.length).reduce((x,y) => x+y, 0);
       }
     }
 
-    const picked = interleave(streams, weights, n, 2, quotas).map(t => ({ ...t, _c: streamConcept[t._c] }));
+    const strong = strictMatch ? applyFloor(streams) : streams;
+    const avail = strong.reduce((a, st) => a + st.length, 0);
+    const picked = interleave(strong, weights, n, 2, quotas).map(t => ({ ...t, _c: streamConcept[t._c] }));
     current = { seq: sequence(picked), concepts, text };
 
     renderReading(concepts, matched, unknown);
@@ -1247,6 +1320,9 @@ async function build(){
     const isNew = current.seq.filter(t => t.neu).length;
     const gotMine = current.seq.length - isNew;
     let msg = `${current.seq.length} track${current.seq.length===1?'':'s'} · ${gotMine} yours, ${isNew} new.`;
+    if(strictMatch && current.seq.length < n){
+      msg += ` Only ${avail} track${avail===1?'':'s'} matched this vibe strongly enough for ${n} slots — a shorter playlist or a broader vibe would fill it.`;
+    }
     if(wantMine !== null && gotMine < wantMine - 1){
       msg += ` Wanted ${wantMine} of yours but only ${gotMine} fit — your library ran out of matching tracks (max 2 per artist), so new ones filled the gap.`;
     }
@@ -1311,8 +1387,12 @@ function renderSet(seq, concepts){
   $('#setPanel').classList.remove('hidden');
   $('#setList').innerHTML = seq.map(t => {
     const bpm = t.f.bpm ? Math.round(t.f.bpm) + ' bpm' : '—';
-    const tag = concepts.length > 1
-      ? `<span style="color:${HUES[t._c%HUES.length]}">${esc(concepts[t._c].label.split(' ')[0])}</span> · ` : '';
+    let tag = '';
+    if(concepts.length > 1){
+      tag = t._cf
+        ? concepts.map((c,i) => `<span style="color:${HUES[i%HUES.length]}">${esc(c.label.split(' ')[0])} ${Math.round(t._cf[i]*100)}</span>`).join(' ') + ' · '
+        : `<span style="color:${HUES[t._c%HUES.length]}">${esc(concepts[t._c].label.split(' ')[0])}</span> · `;
+    }
     return `<li>
       <div><div class="t">${esc(t.name)}</div><div class="a">${esc(t.artists.map(a=>a.name).join(', '))}</div></div>
       <div class="m">${tag}${bpm}${t.f.est ? ' · <span class="est">est</span>' : ''}${t.neu ? ' · <span class="neu">new</span>' : ''}</div>
@@ -1338,20 +1418,90 @@ const WORDS = {
   l:['airless','close','roomy','live','crowd-lit']
 };
 
+/* One written image per concept. The bio is built from these, not from the
+   numbers — the numbers are the cover's job. */
+const IMAGERY = {
+hurricane:'rain in your face', storm:'thunder in the walls', thunder:'the sky cracking open',
+rain:'wet streets, no umbrella', fog:'headlights and nothing else', snow:'everything gone quiet',
+sun:'heat on your eyelids', wind:"the door won't stay shut", heat:'too hot to move',
+cold:'breath you can see', clear:'you can see for miles', grey:'a sky with nothing in it',
+dawn:'the first grey light', morning:"coffee before anyone's up", noon:'shadows straight down',
+dusk:'the light going orange', evening:'the day letting go', night:'the city still awake',
+midnight:'the day turning over', '2am':'nobody left to call', weekend:'nowhere you have to be',
+sunday:'the slow long afternoon', monday:'back to it', friday:'the week finally cracking',
+summer:'sunburn and open windows', winter:'dark by five', autumn:'everything going gold',
+spring:'the thaw setting in', beach:'sand in your toes', ocean:'salt and grey water',
+underwater:'sound gone thick and far', river:'water moving somewhere', desert:'heat and no shade',
+forest:'green closing over you', mountain:'thin air, long view', field:'grass to the horizon',
+garden:'dirt under your nails', city:'sirens two blocks over', subway:'strangers and fluorescent light',
+highway:'headlights and open road', airport:'somewhere between two places', club:'bass through the floor',
+rave:'strobe and no clock', bar:'last call, warm beer', diner:'vinyl booth, cold coffee',
+church:'light through coloured glass', library:'nothing but page turns', kitchen:'something on the stove',
+bedroom:'sheets and low light', shower:'hot water, closed door', attic:'dust and old boxes',
+cabin:'woodsmoke and no signal', arcade:'neon and quarters', elevator:'four floors of nothing',
+hospital:'waiting under white light', prison:"walls that don't move", museum:'quiet rooms, old things',
+space:'nothing in every direction', stadium:'forty thousand voices', picnic:'bread on a blanket',
+party:'everyone talking at once', wedding:'crying and dancing', birthday:'candles and too much cake',
+funeral:'black coats in the rain', breakup:'the empty half of the bed', reunion:'faces you almost forgot',
+goodbye:'the last look back', roadtrip:'windows down, no map', commute:'the same road again',
+workout:'sweat and one more rep', run:'lungs burning, keep going', walk:'nowhere in particular',
+cycling:'wind you make yourself', swim:'weightless and holding breath', flying:'the ground getting small',
+falling:'the floor coming up', sleep:'going under', dream:'none of it makes sense',
+insomnia:'the ceiling all night', meditation:'breath going nowhere', focus:'everything else switched off',
+coding:'hours gone in one sitting', cleaning:'windows open, everything moving', packing:'boxes and bare walls',
+reading:"lost in someone else's head", sad:'heavy for no reason', crying:'everything coming out at once',
+happy:'grinning at nothing', angry:'jaw tight, fists tighter', calm:'nothing needs doing',
+peace:'nothing left to fix', anxious:'waiting for the drop', lonely:'a room with one chair',
+nostalgia:'a song from before', longing:'reaching and not getting there', love:'wanting to stay',
+sexy:'closer than you should be', tender:'careful with each other', hopeful:'maybe this time',
+triumphant:'hands in the air', defiant:'not backing down', confident:'walking in like you own it',
+menacing:'something behind you', creepy:'the house settling', ghost:"someone who isn't there",
+chaos:'everything at once', apocalypse:'after everything ends', war:'ground shaking',
+revenge:'waiting for your turn', bittersweet:'glad and sorry at once', euphoria:'lit up from inside',
+restless:"can't sit still", drunk:'the room tilting friendly', hungover:'daylight as punishment',
+high:'time going soft', psychedelic:"colours where colours shouldn't be", hypnotic:'the same turn again',
+lush:'thick and warm', raw:'unsanded, unpolished', clean:'edges you could cut on',
+sparse:'more space than sound', dense:'wall to wall', slow:'taking its time',
+fast:'no time to think', loud:'ears ringing after', soft:'barely above breath',
+young:'nothing to lose yet', childhood:'a summer that lasted forever', ancient:'older than anyone',
+futuristic:'chrome and clean lines', factory:'steel and shift change', gold:'everything catching light',
+rust:'left out too long', fire:"heat you can't look at", ice:'clear and freezing',
+moon:'light with no warmth', star:'the whole sky out', shadow:'what the light misses',
+light:'everything lit up', ritual:'the same words again', gospel:'the whole room singing',
+carnival:'brass and moving crowds', karaoke:'everybody knows this one'
+};
+
+function conceptFrags(c, max){
+  const out = [];
+  const terms = c.terms.slice();
+  // last noun carries the segment, so read from the end
+  for(let i = terms.length - 1; i >= 0 && out.length < max; i--){
+    const f = IMAGERY[(LEX[terms[i]] || {}).label];
+    if(f && !out.includes(f)) out.push(f);
+  }
+  return out.reverse();
+}
+
 function makeBio(concepts){
-  const v = blended(concepts);
-  const bpm = v.t !== undefined ? Math.round(60 + v.t * 120) : null;
-  const picks = Object.keys(v)
-    .filter(d => d !== 't' && WORDS[d])
-    .map(d => ({ d, far: Math.abs(v[d] - 0.5) }))
-    .sort((a,b) => b.far - a.far).slice(0, 3)
-    .map(x => WORDS[x.d][Math.min(4, Math.floor(v[x.d] * 5))]);
-  if(v.t !== undefined) picks.unshift(WORDS.t[Math.min(4, Math.floor(v.t * 5))]);
-  let out = picks.slice(0, 4).join(', ');
-  if(bpm) out += ' · ' + bpm + ' bpm';
-  // hard cap at 10 words
-  const w = out.split(/\s+/);
-  return w.length > 10 ? w.slice(0, 10).join(' ') : out;
+  let parts;
+  if(concepts.length > 1){
+    // modifiers first, head concept last — it lands the line
+    parts = [];
+    for(let i = concepts.length - 1; i >= 1; i--) parts.push(...conceptFrags(concepts[i], 1));
+    parts.push(...conceptFrags(concepts[0], 1));
+  }else{
+    parts = conceptFrags(concepts[0], 2);
+  }
+  parts = parts.filter(Boolean);
+
+  if(!parts.length){                       // nothing written for this concept yet
+    const v = blended(concepts);
+    const d = Object.keys(v).filter(k => WORDS[k])
+      .sort((a,b) => Math.abs(v[b]-0.5) - Math.abs(v[a]-0.5))[0];
+    return d ? WORDS[d][Math.min(4, Math.floor(v[d]*5))] : 'hard to place';
+  }
+  while(parts.join(', ').split(/\s+/).length > 10 && parts.length > 1) parts.shift();
+  return parts.join(', ');
 }
 
 /* One grade for every cover: duotone into the dusk palette, vignette, grain.
@@ -1404,24 +1554,51 @@ function drawGauges(g, S, v, warmth, push){
   });
 }
 
-/* Openverse: keyless, restricted to public-domain / CC0 so covers carry no
-   attribution obligation. Anonymous access is capped at 5 requests/hour, so
-   every result is cached per vibe and reused. */
+/* Openverse: keyless, anonymous access capped at 5 requests/hour, so every
+   result is cached per query. Public-domain and CC0 first; CC-BY allowed as
+   a fallback with the credit written into the playlist description. */
 let photoCache = load(K.pho, {});
 
-async function findPhoto(query, fresh){
-  if(!fresh && photoCache[query]) return photoCache[query];
-  const url = `https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}`
-            + `&license=cc0,pdm&page_size=12&mature=false`;
+async function ovSearch(q){
+  if(photoCache[q]) return photoCache[q];
+  const url = `https://api.openverse.org/v1/images/?q=${encodeURIComponent(q)}`
+            + `&license=cc0,pdm,by&page_size=20&mature=false`;
   const r = await fetch(url, { headers:{ Accept:'application/json' } });
   if(r.status === 429) throw new Error('rate');
   if(!r.ok) throw new Error('search ' + r.status);
   const j = await r.json();
-  const hits = (j.results || []).filter(x => x.thumbnail).map(x => x.thumbnail);
-  if(!hits.length) throw new Error('no photo');
-  photoCache[query] = hits.slice(0, 8);
+  const hits = (j.results || []).filter(x => x.thumbnail).map(x => ({
+    src: x.thumbnail,
+    text: ((x.title || '') + ' ' + (x.tags || []).map(t => t.name).join(' ')).toLowerCase(),
+    by: x.creator || '',
+    lic: (x.license || '').toLowerCase()
+  }));
+  photoCache[q] = hits;
   save(K.pho, photoCache);
-  return photoCache[query];
+  return hits;
+}
+
+/* The head concept carries 80% of the vibe, but "beach" has far more
+   public-domain photos than "hurricane" — so relevance ranking buries it.
+   Search wide, then keep only photos that actually mention the head subject. */
+async function findPhoto(concepts, fresh){
+  const head = concepts[0];
+  const syn = [...new Set(head.terms.flatMap(k => (LEX[k] && LEX[k].group) || [k]))]
+    .filter(w => /^[a-z]+$/.test(w));
+  const full = concepts.map(c => c.label).join(' ');
+  const relevant = h => syn.some(w => h.text.includes(w.slice(0, Math.max(4, w.length - 2))));
+
+  const tries = fresh ? [head.label + ' ' + full, syn[0], full] : [full, syn[0]];
+  let loose = [];
+  for(const q of tries){
+    if(!q) continue;
+    const hits = await ovSearch(q.trim());
+    if(!loose.length) loose = hits;
+    const good = hits.filter(relevant);
+    if(good.length) return { hits: good, exact: true };
+  }
+  if(loose.length) return { hits: loose, exact: false };
+  throw new Error('no photo');
 }
 
 function loadImg(src){
@@ -1435,6 +1612,8 @@ function loadImg(src){
   });
 }
 
+let coverCredit = null;
+
 async function makeCover(concepts, text, fresh){
   const cv = $('#cover'), g = cv.getContext('2d'), S = 640;
   const v = blended(concepts);
@@ -1442,25 +1621,26 @@ async function makeCover(concepts, text, fresh){
   const push   = v.e === undefined ? 0.5 : v.e;
   $('#coverWrap').classList.remove('hidden');
   coverNote('Finding a photo…');
-
-  // strip prepositions/stopwords so the search reads as a scene
-  const query = text.toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/)
-    .filter(w => w && !STOP.has(w)).join(' ') || text;
+  coverCredit = null;
 
   try{
-    const hits = await findPhoto(query, fresh);
-    const im = await loadImg(hits[Math.floor(Math.random() * hits.length)]);
+    const { hits, exact } = await findPhoto(concepts, fresh);
+    const pick = hits[Math.floor(Math.random() * Math.min(hits.length, 10))];
+    const im = await loadImg(pick.src);
     const scale = Math.max(S / im.width, S / im.height);
     const w = im.width * scale, h = im.height * scale;
     g.clearRect(0,0,S,S);
     g.drawImage(im, (S-w)/2, (S-h)/2, w, h);
     grade(g, S, warmth, push);
-    coverNote('Public-domain photo, graded to match.');
+    if(pick.lic && !/cc0|pdm/.test(pick.lic) && pick.by) coverCredit = `Photo: ${pick.by} (CC ${pick.lic.toUpperCase()})`;
+    coverNote(exact
+      ? `Matched on “${concepts[0].label}”.` + (coverCredit ? ' ' + coverCredit : '')
+      : `No photo mentions “${concepts[0].label}” — this is the closest match.`);
   }catch(e){
     drawGauges(g, S, v, warmth, push);
     coverNote(
       e.message === 'rate' ? 'Photo search limit reached (5 an hour without an account) — using the reading for now.'
-      : e.message === 'no photo' ? 'No public-domain photo matched those words — using the reading instead.'
+      : e.message === 'no photo' ? 'No openly-licensed photo matched those words — using the reading instead.'
       : 'Photo could not be loaded — using the reading instead.');
   }
 }
@@ -1503,7 +1683,8 @@ async function createPlaylist(){
   try{
     setLog('Creating playlist…');
     const pl = await sp('/me/playlists', { method:'POST', body: JSON.stringify({
-      name, public:false, description: bio || current.text
+      name, public:false,
+      description: ((bio || current.text) + (coverCredit ? ' · ' + coverCredit : '')).slice(0, 290)
     })});
     const uris = current.seq.map(t => 'spotify:track:' + t.id);
     for(let i = 0; i < uris.length; i += 100){
@@ -1588,6 +1769,18 @@ document.querySelectorAll('#srcSeg button').forEach(b => {
 });
 $('#createBtn').onclick = createPlaylist;
 $('#reroll').onclick = () => { if(current) makeCover(current.concepts, current.text, true); };
+document.querySelectorAll('#strictSeg button').forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll('#strictSeg button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on'); strictMatch = b.dataset.strict === '1';
+  };
+});
+document.querySelectorAll('#blendSeg button').forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll('#blendSeg button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on'); blendMode = b.dataset.blend;
+  };
+});
 document.querySelectorAll('#langSeg button').forEach(b => {
   b.onclick = () => {
     document.querySelectorAll('#langSeg button').forEach(x => x.classList.remove('on'));
