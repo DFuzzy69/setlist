@@ -155,7 +155,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 7</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -1047,19 +1047,33 @@ function rankFor(concept, pool, disc){
 }
 
 /* Weight-proportional interleave: never averages two concepts together,
-   it alternates between their own ranked lists. */
-function interleave(ranked, weights, n, maxPerArtist = 2){
+   it alternates between their own ranked lists. With quotas, each stream gets
+   an exact allocation; a stream that runs dry hands its remainder to the others
+   and the shortfall is reported rather than silently absorbed. */
+function interleave(ranked, weights, n, maxPerArtist = 2, quotas = null){
   const idx = ranked.map(() => 0), taken = ranked.map(() => 0);
   const seen = new Set(), byArtist = {}, out = [];
+  const cap = quotas ? quotas.slice() : null;
   let guard = 0;
-  while(out.length < n && guard++ < n * 40){
-    let pick = 0, best = -Infinity;
+
+  while(out.length < n && guard++ < n * 200){
+    let pick = -1, best = -Infinity;
     for(let c = 0; c < ranked.length; c++){
       if(idx[c] >= ranked[c].length) continue;
+      if(cap && taken[c] >= cap[c]) continue;
       const deficit = weights[c] * (out.length + 1) - taken[c];
       if(deficit > best){ best = deficit; pick = c; }
     }
-    if(best === -Infinity) break;
+    if(pick < 0){
+      if(!cap) break;
+      // a stream ran dry or hit its cap — let the others take the slack
+      let opened = false;
+      for(let c = 0; c < ranked.length; c++){
+        if(idx[c] < ranked[c].length && taken[c] >= cap[c]){ cap[c] = n; opened = true; }
+      }
+      if(!opened) break;
+      continue;
+    }
     const row = ranked[pick][idx[pick]++];
     if(!row) continue;
     const tr = row.t;
@@ -1069,6 +1083,7 @@ function interleave(ranked, weights, n, maxPerArtist = 2){
     seen.add(tr.id); byArtist[aid] = (byArtist[aid]||0) + 1; taken[pick]++;
     out.push({ ...tr, _c: pick, _s: row.s });
   }
+  out.taken = taken;
   return out;
 }
 
@@ -1113,7 +1128,7 @@ async function build(){
   $('#buildBtn').disabled = true;
 
   try{
-    let streams, weights, streamConcept;
+    let streams, weights, streamConcept, quotas = null, wantMine = null;
 
     if(source === 'lib'){
       const ranked = concepts.map(c => rankFor(c, mine, disc));
@@ -1138,23 +1153,37 @@ async function build(){
         streamConcept = concepts.map((c,i) => i);
       }else{
         /* Both: the slider is the mix ratio, not a nudge. Middle means half and half.
-           Two streams per concept so the split is exact rather than emergent. */
+           Two streams per concept, each with a hard quota, so the split is exact. */
         streams = []; weights = []; streamConcept = [];
+        const quotaOf = [];
         concepts.forEach((c, i) => {
-          if(disc < 1){ streams.push(rankFor(c, mine, 0.5));  weights.push(c.weight * (1 - disc)); streamConcept.push(i); }
-          if(disc > 0){ streams.push(rankFor(c, fresh, 0.5)); weights.push(c.weight * disc);       streamConcept.push(i); }
+          if(disc < 1){ streams.push(rankFor(c, mine, 0.5));  weights.push(c.weight*(1-disc)); streamConcept.push(i); quotaOf.push(c.weight*(1-disc)); }
+          if(disc > 0){ streams.push(rankFor(c, fresh, 0.5)); weights.push(c.weight*disc);     streamConcept.push(i); quotaOf.push(c.weight*disc); }
         });
+        // largest remainder, so the quotas sum to exactly n
+        const raw = quotaOf.map(w => w * n);
+        quotas = raw.map(Math.floor);
+        let left = n - quotas.reduce((a,b) => a+b, 0);
+        raw.map((v,i) => ({ i, r: v - Math.floor(v) })).sort((a,b) => b.r - a.r)
+           .forEach(x => { if(left > 0){ quotas[x.i]++; left--; } });
+        wantMine = quotas.filter((q,i) => !streams[i].some(r => r.t.neu)).reduce((a,b) => a+b, 0);
       }
     }
 
-    const picked = interleave(streams, weights, n).map(t => ({ ...t, _c: streamConcept[t._c] }));
+    const picked = interleave(streams, weights, n, 2, quotas).map(t => ({ ...t, _c: streamConcept[t._c] }));
     current = { seq: sequence(picked), concepts, text };
 
     renderReading(concepts, matched, unknown);
     renderSet(current.seq, concepts);
     $('#plName').value = text.replace(/\b\w/g, m => m.toUpperCase());
-    const fresh = current.seq.filter(t => t.neu).length;
-    vibeLog(`${current.seq.length} track${current.seq.length===1?'':'s'} · ${current.seq.length - fresh} yours, ${fresh} new.`);
+
+    const isNew = current.seq.filter(t => t.neu).length;
+    const gotMine = current.seq.length - isNew;
+    let msg = `${current.seq.length} track${current.seq.length===1?'':'s'} · ${gotMine} yours, ${isNew} new.`;
+    if(wantMine !== null && gotMine < wantMine - 1){
+      msg += ` Wanted ${wantMine} of yours but only ${gotMine} fit — your library ran out of matching tracks (max 2 per artist), so new ones filled the gap.`;
+    }
+    vibeLog(msg);
     $('#setPanel').scrollIntoView({ behavior:'smooth', block:'start' });
   }catch(e){
     vibeLog('Build failed: ' + e.message);
