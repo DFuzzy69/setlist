@@ -163,7 +163,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 27</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 29</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -287,13 +287,13 @@ const REDIRECT_URI = 'https://dfuzzy69.github.io/setlist/';
 /* Baked in so the app just works on load. Safe to publish: with PKCE there is no
    client secret, and this ID is already visible in the authorize URL. */
 const DEFAULT_CLIENT_ID = 'dbf692a6a9274e3d886495166c4f5116';
-const SCOPES = 'user-library-read playlist-modify-private playlist-modify-public user-top-read ugc-image-upload';
+const SCOPES = 'user-library-read playlist-modify-private playlist-modify-public user-top-read user-read-recently-played ugc-image-upload';
 const API   = 'https://api.spotify.com/v1';
 const RECCO = 'https://api.reccobeats.com/v1';
 const AUTH  = 'https://accounts.spotify.com/authorize';
 const TOKEN = 'https://accounts.spotify.com/api/token';
 
-const K = { pho:'sl.pho2', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
+const K = { pho:'sl.pho2', heard:'sl.heard', topn:'sl.topn', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
 
 const $ = s => document.querySelector(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -505,19 +505,22 @@ async function syncLibrary(incremental){
   progress(0); busy(false); paint();
 }
 
+let topNames = load(K.topn, {});
 async function loadTop(){
-  if(topArt) return;
-  const map = {};
+  if(topArt && Object.keys(topNames).length) return;
+  const map = {}, names = {};
   try{
     for(const range of ['short_term','medium_term','long_term']){
       const r = await sp(`/me/top/artists?limit=50&time_range=${range}`);
       (r.items||[]).forEach((a, i) => {
         map[a.id] = Math.max(map[a.id] || 0, 1 - i / 50);
+        names[a.id] = a.name;
       });
       await sleep(80);
     }
   }catch(e){ /* user-top-read may be declined; library counts still work */ }
-  topArt = map; save(K.top, topArt);
+  topArt = map; topNames = names;
+  save(K.top, topArt); save(K.topn, topNames);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -557,7 +560,11 @@ async function rb(ids){
 async function fetchFeatures(){
   abort = false; busy(true);
   const todo = library.map(t => t.id).filter(id => !(id in features));
-  if(!todo.length){ libLog('Every track already has a reading.'); busy(false); return paint(); }
+  if(!todo.length){
+    busy(false);
+    await loadAllGenres();          // features done — continue the genre pass
+    return paint();
+  }
 
   let done = 0, got = 0;
   for(let i = 0; i < todo.length && !abort; i += RB_BATCH){
@@ -591,11 +598,36 @@ async function fetchFeatures(){
     libLog(`${got} tracks read. ${missing.length} not covered — estimating those from artist genre.`);
     await genreFallback(missing);
   }
-  busy(false); paint();
+  busy(false);
+  if(!abort) await loadAllGenres();
+  paint();
 }
 
-/* Genre fallback. GET /artists?ids= was REMOVED in Feb 2026, so this is
-   one request per artist — cached hard, throttled, and stoppable. */
+/* Full artist-genre pass. Audio features can't tell aggression from bigness —
+   a belted pop ballad and a metal track both read loud/fast/dark — so genre is
+   the missing signal, and it needs coverage of the whole library.
+   GET /artists?ids= was REMOVED in Feb 2026, so this is one request per
+   artist — cached hard, throttled, and stoppable; run once, resumable. */
+async function loadAllGenres(){
+  const need = [...new Set(library.flatMap(t => t.artists.map(a => a.id)).filter(id => id && !(id in genres)))];
+  if(!need.length) return;
+  busy(true);
+  let n = 0;
+  for(const id of need){
+    if(abort) break;
+    try{ const a = await sp('/artists/' + id); genres[id] = a.genres || []; }
+    catch(e){ if(/session|sign/.test(e.message)) break; genres[id] = []; }
+    n++;
+    progress(n / need.length);
+    libLog(`Learning artist genres… ${n} of ${need.length} (one-time, resumable)`);
+    if(n % 40 === 0) save(K.gen, genres);
+    await sleep(110);
+  }
+  save(K.gen, genres);
+  progress(0); busy(false);
+  libLog(abort ? 'Stopped — progress saved. Press "Read audio features" to continue.' : 'Artist genres learned. Ready.');
+}
+
 async function genreFallback(missing){
   const need = [...new Set(missing.flatMap(t => t.artists.map(a => a.id)).filter(id => id && !(id in genres)))];
   let n = 0;
@@ -619,6 +651,91 @@ async function genreFallback(missing){
   save(K.feat, features);
   progress(0);
   libLog(`${est} track${est===1?'':'s'} estimated from genre. Ready.`);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   HEARD BUT NOT SAVED
+   Spotify keeps no full listening history, so "heard" means what it can
+   mean: your most-played tracks (three time ranges) plus the last ~50
+   plays — minus anything already saved. That's the songs you clearly
+   like but never hit the heart on.
+   ═══════════════════════════════════════════════════════════════════ */
+let heard = load(K.heard, null);   // { id: {id,name,artists} }
+
+async function loadHeard(){
+  if(heard) return;
+  const have = new Set(library.map(t => t.id));
+  const out = {};
+  const put = t => {
+    if(!t || !t.id || have.has(t.id) || out[t.id]) return;
+    out[t.id] = { id:t.id, name:t.name, artists:(t.artists||[]).map(a => ({id:a.id, name:a.name})) };
+  };
+  try{
+    for(const range of ['short_term','medium_term','long_term']){
+      const r = await sp(`/me/top/tracks?limit=50&time_range=${range}`);
+      (r.items||[]).forEach(put);
+      await sleep(80);
+    }
+  }catch(e){ /* scope declined — fine */ }
+  try{
+    const r = await sp('/me/player/recently-played?limit=50');
+    (r.items||[]).forEach(x => put(x.track));
+  }catch(e){ /* needs a reconnect for the new permission — proceed without */ }
+  heard = out; save(K.heard, heard);
+}
+
+async function featuresFor(list){
+  const need = list.map(t => t.id).filter(id => !(id in features) && !discovered[id]);
+  for(let i = 0; i < need.length; i += RB_BATCH){
+    const rows = await rb(need.slice(i, i + RB_BATCH));
+    for(const row of rows){
+      const m = /([A-Za-z0-9]{22})/.exec((row.href||'').split('/').pop() || '');
+      if(m) features[m[1]] = normFeat(row);
+    }
+    await sleep(RB_GAP);
+  }
+  save(K.feat, features);
+  return list.map(t => ({ ...t, f: features[t.id] || (discovered[t.id] && discovered[t.id].f) }))
+             .filter(t => t.f);
+}
+
+/* Tracks by your top artists, via search — artist top-tracks was removed
+   Feb 2026, but search still answers artist:"Name". */
+async function topArtistTracks(exclude){
+  const ids = Object.keys(topArt || {}).sort((a,b) => topArt[b] - topArt[a]).slice(0, 10);
+  const out = [];
+  for(const aid of ids){
+    const name = topNames[aid];
+    if(!name) continue;
+    try{
+      const r = await sp(`/search?q=${encodeURIComponent('artist:"' + name + '"')}&type=track&limit=10`);
+      for(const t of (r?.tracks?.items || [])){
+        if(!t.id || exclude.has(t.id)) continue;
+        if(!(t.artists||[]).some(a => a.id === aid)) continue;   // search is fuzzy
+        out.push({ id:t.id, name:t.name, artists:t.artists.map(a => ({id:a.id, name:a.name})) });
+        exclude.add(t.id);
+      }
+    }catch(e){}
+    await sleep(90);
+  }
+  return out;
+}
+
+/* Fill remaining slots, best-first, respecting the artist cap. */
+function topUp(picked, ranked, n, tag){
+  const seen = new Set(picked.map(t => t.id));
+  const byArtist = {};
+  picked.forEach(t => { const a = t.artists[0]?.id; if(a) byArtist[a] = (byArtist[a]||0) + 1; });
+  for(const r of ranked){
+    if(picked.length >= n) break;
+    const t = r.t;
+    if(seen.has(t.id)) continue;
+    const a = t.artists[0]?.id;
+    if(a && (byArtist[a]||0) >= 2) continue;
+    seen.add(t.id); if(a) byArtist[a] = (byArtist[a]||0) + 1;
+    picked.push({ ...t, _cf: r.cf, _ts: r.ts, [tag]: true });
+  }
+  return picked;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1476,18 +1593,55 @@ function adjust(t, base, disc){
   return base + TASTE_W * taste(t.f) - bias * familiarity(t) * 0.45 - pen;
 }
 
+/* What genre does this artist actually play, and does that genre live anywhere
+   near the vibe? Answered in the same 8 dimensions as everything else. */
+function genreFitOf(t, vec){
+  const gs = t.artists.flatMap(a => genres[a.id] || []);
+  if(!gs.length) return null;
+  let best = -1;
+  for(const g of gs){
+    const lg = g.toLowerCase();
+    for(const key in GENRE_VEC){
+      if(lg.includes(key)){
+        const f = fit(vec, GENRE_VEC[key]);
+        if(f > best) best = f;
+      }
+    }
+  }
+  return best >= 0 ? best : null;
+}
+const GENRE_W = 0.34;        // weight of genre vs measured features
+/* The veto is relative: "hurricane" genres top out near 0.97, "crying" near
+   0.67, so a fixed bar would ban whole vibes. An artist's genre must land
+   within reach of the best genre fit this vibe has. */
+const GENRE_VETO_REL = 0.68;
+function genreFloor(vec){
+  let best = 0;
+  for(const key in GENRE_VEC){ const f = fit(vec, GENRE_VEC[key]); if(f > best) best = f; }
+  return best * GENRE_VETO_REL;
+}
+
 function rankFused(concepts, pool, disc){
   return pool.map(t => {
-    const raw = fuse(concepts, t.f);
-    return { t, raw, s: adjust(t, raw, disc), cf: conceptFits(concepts, t.f), ts: taste(t.f) };
+    let raw = fuse(concepts, t.f);
+    const gf = genreFitOf(t, concepts[0].vec);
+    /* Features say what a track measures; genre says what it is. A pop ballad
+       can measure like a storm — loud, fast, minor — but pop soul is not a
+       hurricane, and the blend lets the genre pull the score back down. */
+    if(gf !== null) raw = raw * (1 - GENRE_W) + gf * GENRE_W;
+    return { t, raw, gf, s: adjust(t, raw, disc), cf: conceptFits(concepts, t.f), ts: taste(t.f) };
   }).sort((a,b) => b.s - a.s);
 }
 
 /* Keep tracks that actually are the main subject and clear their language bar.
    One ranked list — the fused score already orders "does both" above "does one",
    so nothing needs bucketing. */
-function eligible(ranked, best){
-  return ranked.filter(r => r.cf[0] >= HEAD_MIN && shapeOk(r.cf) && r.raw >= langBar(r.t, best));
+function eligible(ranked, best, gFloor){
+  return ranked.filter(r =>
+    r.cf[0] >= HEAD_MIN &&
+    shapeOk(r.cf) &&
+    (r.gf === null || r.gf >= gFloor) &&
+    r.raw >= langBar(r.t, best));
 }
 
 /* Single-concept ranking. Only used to pick seed tracks for recommendations,
@@ -1610,8 +1764,9 @@ async function build(){
     const rFresh = src.fresh.length ? rankFused(concepts, src.fresh, disc) : [];
     const best = Math.max(0.0001, ...rMine.map(r => r.raw), ...rFresh.map(r => r.raw));
 
-    const eMine  = eligible(rMine, best);
-    const eFresh = eligible(rFresh, best);
+    const gFloor = genreFloor(concepts[0].vec);
+    const eMine  = eligible(rMine, best, gFloor);
+    const eFresh = eligible(rFresh, best, gFloor);
 
     const mineShare  = src.fresh.length ? (src.mine.length ? 1 - disc : 0) : 1;
     const freshShare = src.mine.length  ? (src.fresh.length ? disc : 0)    : 1;
@@ -1628,7 +1783,40 @@ async function build(){
     wantMine = quotas[0];
 
     const avail = streams.reduce((a, st) => a + st.length, 0);
-    const picked = interleave(streams, weights, n, 2, quotas);
+    let picked = interleave(streams, weights, n, 2, quotas);
+
+    /* My library came up short: widen in order of closeness to you —
+       songs you've heard but never saved, then your top artists' catalogue,
+       then similar new music. Every candidate faces the same vibe gates. */
+    let heardCt = 0, topCt = 0, freshCt = 0;
+    if(source === 'lib' && picked.length < n){
+      vibeLog(`${picked.length} of ${n} from your library — pulling in songs you've heard…`);
+      await loadHeard();
+      const exclude = new Set([...library.map(t => t.id), ...picked.map(t => t.id)]);
+      const hPool = await featuresFor(Object.values(heard || {}).filter(t => !exclude.has(t.id)));
+      const hRank = eligible(rankFused(concepts, hPool, disc), best, gFloor);
+      const before = picked.length;
+      picked = topUp(picked, hRank, n, 'heardTag');
+      heardCt = picked.length - before;
+
+      if(picked.length < n){
+        vibeLog(`Still ${n - picked.length} short — checking your top artists…`);
+        picked.forEach(t => exclude.add(t.id));
+        const aPool = await featuresFor(await topArtistTracks(exclude));
+        const aRank = eligible(rankFused(concepts, aPool, disc), best, gFloor);
+        const b2 = picked.length;
+        picked = topUp(picked, aRank, n, 'neu');
+        topCt = picked.length - b2;
+      }
+      if(picked.length < n){
+        vibeLog(`Still short — finding similar new music…`);
+        const fresh2 = await findNew(concepts, concepts.map(c => rankFor(c, mine, 0.5)), n - picked.length);
+        const fRank = eligible(rankFused(concepts, fresh2, disc), best, gFloor);
+        const b3 = picked.length;
+        picked = topUp(picked, fRank, n, 'neu');
+        freshCt = picked.length - b3;
+      }
+    }
     current = { seq: sequence(picked), concepts, text };
 
     renderReading(concepts, matched, unknown);
@@ -1642,7 +1830,9 @@ async function build(){
     const gotMine = current.seq.length - isNew;
     const gotAll = current.seq.filter(t => t._cf && doesAll(t._cf)).length;
     const pct = current.seq.length ? Math.round(gotAll / current.seq.length * 100) : 0;
-    let msg = `${current.seq.length} track${current.seq.length===1?'':'s'} · ${gotMine} yours, ${isNew} new`;
+    const heardN = current.seq.filter(t => t.heardTag).length;
+    let msg = `${current.seq.length} track${current.seq.length===1?'':'s'} · ${gotMine - heardN} yours` +
+      (heardN ? `, ${heardN} heard` : '') + `, ${isNew} new`;
     if(concepts.length > 1) msg += ` · ${pct}% do the whole vibe`;
     const ts = current.seq.filter(t => t._ts !== undefined);
     if(ts.length) msg += ` · ${Math.round(ts.reduce((a,t) => a + t._ts, 0) / ts.length * 100)}% like your library`;
@@ -1720,7 +1910,7 @@ function renderSet(seq, concepts){
     }
     return `<li>
       <div><div class="t">${esc(t.name)}</div><div class="a">${esc(t.artists.map(a=>a.name).join(', '))}</div></div>
-      <div class="m">${tag}${bpm}${t.f.est ? ' · <span class="est">est</span>' : ''}${t._ts !== undefined ? ' · you ' + Math.round(t._ts*100) : ''}${t.neu ? ' · <span class="neu">new</span>' : ''}</div>
+      <div class="m">${tag}${bpm}${t.f.est ? ' · <span class="est">est</span>' : ''}${t._ts !== undefined ? ' · you ' + Math.round(t._ts*100) : ''}${t.heardTag ? ' · <span class="neu">heard</span>' : ''}${t.neu ? ' · <span class="neu">new</span>' : ''}</div>
     </li>`;
   }).join('');
   $('#setLog').textContent = '';
