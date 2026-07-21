@@ -158,7 +158,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 15</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 17</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -1026,6 +1026,7 @@ let artistCount = {};
 function recount(){
   artistCount = {};
   for(const t of library) for(const a of t.artists) artistCount[a.id] = (artistCount[a.id]||0) + 1;
+  buildTaste();
 }
 
 /* Not all dimensions carry equal weight for "does this feel right".
@@ -1093,9 +1094,81 @@ function langOf(t){
 }
 function langBar(t, best){ return best * (LANG_BAR[langOf(t)] || LANG_BAR.other); }
 
-/* A multi-part vibe is always fused: weighted geometric mean of each concept's
-   fit, so being strong on one and weak on another is punished hard. Averaging
-   would reward the midpoint, which is neither thing. */
+/* ═══════════════════════════════════════════════════════════════════
+   ═══════════════════════════════════════════════════════════════════
+   TASTE PROFILE
+   Artist familiarity alone can't carry your taste — it's zero for anything
+   new, and the discovery slider cancels it at the midpoint. So this clusters
+   your library's actual audio features into the handful of shapes you listen
+   to. A track resembling any one of them counts as "sounds like your stuff",
+   even by an artist you've never heard.
+   ═══════════════════════════════════════════════════════════════════ */
+const TASTE_K = 8, TASTE_W = 0.26;
+let clusters = null;
+
+function vecOf(f){ return DIMS.map(d => (f[d] === null || f[d] === undefined) ? 0.5 : f[d]); }
+
+function buildTaste(){
+  const pts = [], wts = [];
+  for(const t of library){
+    const f = features[t.id];
+    if(!f || f.est) continue;
+    pts.push(vecOf(f));
+    const c = t.artists.reduce((m,a) => Math.max(m, artistCount[a.id] || 0), 0);
+    wts.push(1 + Math.log(1 + c));          // artists you've saved more of pull harder
+  }
+  if(pts.length < TASTE_K * 3){ clusters = null; return; }
+
+  // deterministic spread-out start, then a few Lloyd iterations
+  let cen = [];
+  for(let k = 0; k < TASTE_K; k++) cen.push(pts[Math.floor(k * pts.length / TASTE_K)].slice());
+  let assign = new Array(pts.length).fill(0);
+  for(let it = 0; it < 12; it++){
+    for(let i = 0; i < pts.length; i++){
+      let bi = 0, bd = Infinity;
+      for(let k = 0; k < TASTE_K; k++){
+        let d = 0;
+        for(let j = 0; j < DIMS.length; j++){ const x = pts[i][j] - cen[k][j]; d += x*x; }
+        if(d < bd){ bd = d; bi = k; }
+      }
+      assign[i] = bi;
+    }
+    const sum = cen.map(() => new Array(DIMS.length).fill(0)), tot = new Array(TASTE_K).fill(0);
+    for(let i = 0; i < pts.length; i++){
+      const k = assign[i], w = wts[i];
+      for(let j = 0; j < DIMS.length; j++) sum[k][j] += pts[i][j] * w;
+      tot[k] += w;
+    }
+    for(let k = 0; k < TASTE_K; k++)
+      if(tot[k] > 0) for(let j = 0; j < DIMS.length; j++) cen[k][j] = sum[k][j] / tot[k];
+  }
+  const grand = tot_sum(assign, wts);
+  clusters = cen.map((c, k) => {
+    const vec = {}; DIMS.forEach((d, j) => vec[d] = c[j]);
+    return { vec, share: grand[k] };
+  }).filter(c => c.share > 0);
+}
+function tot_sum(assign, wts){
+  const tot = new Array(TASTE_K).fill(0);
+  for(let i = 0; i < assign.length; i++) tot[assign[i]] += wts[i];
+  const all = tot.reduce((a,b) => a+b, 0) || 1;
+  return tot.map(x => x / all);
+}
+
+/* How much does this sound like something already in your library? */
+function taste(f){
+  if(!clusters || !clusters.length) return 0.5;
+  let best = 0;
+  for(const c of clusters){
+    const s = fit(c.vec, f) * (0.88 + 0.12 * Math.min(1, c.share * TASTE_K));
+    if(s > best) best = s;
+  }
+  return best;
+}
+
+/* A multi-part vibe is always fused: the weighted geometric mean of each
+   concept's fit, so being strong on one and weak on another is punished hard.
+   Averaging would reward the midpoint, which is neither thing. */
 const BOTH_SHARE = 0.85;   // share of the playlist that must satisfy every concept
 const BALANCE    = 0.72;   // weakest concept fit vs strongest, within one track
 
@@ -1124,13 +1197,16 @@ function adjust(t, base, disc){
     let h = 0; for(let i = 0; i < t.id.length; i++) h = (h * 31 + t.id.charCodeAt(i)) >>> 0;
     pen = 0.13 + (h % 1000) / 1000 * 0.07;
   }
-  return base - bias * familiarity(t) * 0.30 - pen;
+  /* Taste is always on. The slider moves you off your most-played artists,
+     not off your taste — at full discovery you want new names that still
+     sound like your library, not noise. */
+  return base + TASTE_W * taste(t.f) - bias * familiarity(t) * 0.30 - pen;
 }
 
 function rankFused(concepts, pool, disc){
   return pool.map(t => {
     const raw = fuse(concepts, t.f);
-    return { t, raw, s: adjust(t, raw, disc), cf: conceptFits(concepts, t.f) };
+    return { t, raw, s: adjust(t, raw, disc), cf: conceptFits(concepts, t.f), ts: taste(t.f) };
   }).sort((a,b) => b.s - a.s);
 }
 
@@ -1197,7 +1273,7 @@ function interleave(ranked, weights, n, maxPerArtist = 2, quotas = null){
     const aid = tr.artists[0] ? tr.artists[0].id : tr.id;
     if((byArtist[aid]||0) >= maxPerArtist) continue;
     seen.add(tr.id); byArtist[aid] = (byArtist[aid]||0) + 1; taken[pick]++;
-    out.push({ ...tr, _c: pick, _s: row.s, _cf: row.cf });
+    out.push({ ...tr, _c: pick, _s: row.s, _cf: row.cf, _ts: row.ts });
   }
   out.taken = taken;
   return out;
@@ -1307,6 +1383,8 @@ async function build(){
     const pct = current.seq.length ? Math.round(gotAll / current.seq.length * 100) : 0;
     let msg = `${current.seq.length} track${current.seq.length===1?'':'s'} · ${gotMine} yours, ${isNew} new`;
     if(concepts.length > 1) msg += ` · ${pct}% do the whole vibe`;
+    const ts = current.seq.filter(t => t._ts !== undefined);
+    if(ts.length) msg += ` · ${Math.round(ts.reduce((a,t) => a + t._ts, 0) / ts.length * 100)}% like your library`;
     msg += '.';
     if(current.seq.length < n){
       msg += ` Only ${avail} track${avail===1?'':'s'} cleared the bar for ${n} slots — a shorter playlist or a broader vibe would fill it.`;
@@ -1381,7 +1459,7 @@ function renderSet(seq, concepts){
     }
     return `<li>
       <div><div class="t">${esc(t.name)}</div><div class="a">${esc(t.artists.map(a=>a.name).join(', '))}</div></div>
-      <div class="m">${tag}${bpm}${t.f.est ? ' · <span class="est">est</span>' : ''}${t.neu ? ' · <span class="neu">new</span>' : ''}${t._head ? ' · <span class="est">head</span>' : ''}</div>
+      <div class="m">${tag}${bpm}${t.f.est ? ' · <span class="est">est</span>' : ''}${t._ts !== undefined ? ' · you ' + Math.round(t._ts*100) : ''}${t.neu ? ' · <span class="neu">new</span>' : ''}${t._head ? ' · <span class="est">head</span>' : ''}</div>
     </li>`;
   }).join('');
   $('#setLog').textContent = '';
@@ -1619,9 +1697,10 @@ async function makeCover(concepts, text, fresh){
     g.drawImage(im, (S-w)/2, (S-h)/2, w, h);
     grade(g, S, warmth, push);
     if(pick.lic && !/cc0|pdm/.test(pick.lic) && pick.by) coverCredit = `Photo: ${pick.by} (CC ${pick.lic.toUpperCase()})`;
-    coverNote(exact
-      ? `Matched on “${concepts[0].label}”.` + (coverCredit ? ' ' + coverCredit : '')
-      : `No photo mentions “${concepts[0].label}” — this is the closest match.`);
+    const base = exact
+      ? `Matched on “${concepts[0].label}”.`
+      : `No photo mentions “${concepts[0].label}” — this is the closest match.`;
+    coverNote(base + (coverCredit ? '  ' + coverCredit : ''));
   }catch(e){
     drawGauges(g, S, v, warmth, push);
     coverNote(
@@ -1669,8 +1748,7 @@ async function createPlaylist(){
   try{
     setLog('Creating playlist…');
     const pl = await sp('/me/playlists', { method:'POST', body: JSON.stringify({
-      name, public:false,
-      description: ((bio || current.text) + (coverCredit ? ' · ' + coverCredit : '')).slice(0, 290)
+      name, public:false, description: (bio || current.text).slice(0, 290)
     })});
     const uris = current.seq.map(t => 'spotify:track:' + t.id);
     for(let i = 0; i < uris.length; i += 100){
