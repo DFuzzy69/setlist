@@ -81,6 +81,9 @@ button.primary:hover:not(:disabled){background:#f2b262;border-color:#f2b262}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 .spread{display:flex;gap:24px;flex-wrap:wrap}
 .spread > div{flex:1 1 240px}
+select{width:100%;background:var(--ink);border:1px solid var(--haze);color:var(--mist);
+  border-radius:var(--r);padding:10px 12px;font-family:inherit;font-size:15px;appearance:none}
+select:focus{outline:2px solid var(--sodium);outline-offset:1px}
 input[type=range]{width:100%;accent-color:var(--sodium);margin:6px 0}
 .rangehead{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
 .rangehead b{font-family:'DM Mono',monospace;color:var(--mist);font-weight:500;text-transform:none;letter-spacing:0}
@@ -158,7 +161,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 20</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 25</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -206,6 +209,14 @@ details[open] summary{margin-bottom:12px}
 <section class="panel hidden" id="vibePanel">
   <h2>The vibe</h2>
   <input type="text" id="vibe" placeholder="hurricane on a beach" autocomplete="off" spellcheck="false">
+  <div class="row" style="margin-top:12px;align-items:flex-end">
+    <div style="flex:1 1 200px">
+      <label class="f" for="genreSel">Stuck? Start from a genre</label>
+      <select id="genreSel"><option value="">Pick a genre…</option></select>
+    </div>
+    <button id="genreAgain">Another vibe</button>
+  </div>
+  <p class="muted" id="genreNote" style="margin:8px 0 0;font-size:12px"></p>
   <div class="spread" style="margin-top:22px">
     <div style="flex:1 1 100%">
       <label class="f">Where songs come from</label>
@@ -913,6 +924,172 @@ function fromGenres(list){
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+   GENRE — naming a playlist's centre of gravity, and inventing vibes
+   ═══════════════════════════════════════════════════════════════════ */
+const GENRE_LABEL = {
+  'r&b':'R&B', 'lo-fi':'Lo-fi', 'edm':'EDM', 'drum and bass':'Drum & Bass',
+  'hip hop':'Hip-Hop', 'k-pop':'K-Pop', 'new age':'New Age', 'trip hop':'Trip-Hop',
+  'post-rock':'Post-Rock', 'math rock':'Math Rock', 'garage rock':'Garage Rock',
+  'singer-songwriter':'Singer-Songwriter', 'video game':'Video Game', 'psych':'Psychedelic',
+  'prog':'Prog', 'doom':'Doom', 'dub':'Dub', 'ska':'Ska'
+};
+const pretty = g => GENRE_LABEL[g] || g.replace(/\b\w/g, m => m.toUpperCase());
+
+/* Nearest genre to a track, by the same eight dimensions as everything else.
+   Real artist genres win when we happen to have them cached. */
+function genreOfTrack(t){
+  const gs = t.artists.flatMap(a => genres[a.id] || []);
+  for(const g of gs){
+    const lg = g.toLowerCase();
+    for(const key in GENRE_VEC) if(lg.includes(key)) return key;
+  }
+  let best = null, bs = -1;
+  for(const key in GENRE_VEC){
+    const s = fit(GENRE_VEC[key], t.f);
+    if(s > bs){ bs = s; best = key; }
+  }
+  return best;
+}
+
+function playlistGenre(seq){
+  const tally = {};
+  for(const t of seq){ const g = genreOfTrack(t); if(g) tally[g] = (tally[g] || 0) + 1; }
+  let best = null, bn = 0;
+  for(const g in tally) if(tally[g] > bn){ bn = tally[g]; best = g; }
+  return best ? { key: best, label: pretty(best), share: bn / Math.max(seq.length, 1) } : null;
+}
+
+/* ---- inventing a vibe from a genre ---- */
+const LEX_ENTRIES = (() => {
+  const seen = new Set(), out = [];
+  for(const w in LEX){
+    const e = LEX[w];
+    if(seen.has(e.label)) continue;
+    seen.add(e.label); out.push(e);
+  }
+  return out;
+})();
+
+/* A vibe is a subject somewhere, or a subject at some time — "hurricane on a
+   beach", "foggy picnic at dusk". Letting any concept fill either slot gives
+   "forest at bedroom" and "apocalypse on a euphoria", so settings are their
+   own list and subjects are everything else. */
+const PLACES = new Set(['beach','ocean','underwater','river','desert','forest','mountain','field',
+ 'garden','city','subway','highway','airport','club','rave','bar','diner','church','library',
+ 'kitchen','bedroom','shower','attic','cabin','arcade','elevator','hospital','prison','museum',
+ 'space','stadium']);
+const TIMES = new Set(['dawn','morning','noon','dusk','evening','night','midnight','2am','weekend',
+ 'sunday','monday','friday','summer','winter','autumn','spring']);
+
+const ADJISH = /(y|ing|ed|ic|al|ish|ous|ful|less)$/;
+/* Labels are the first alias, which is sometimes the adjective form ("wind",
+   "anxious"). Pick the form that fits the slot — but never second-guess a
+   place or a time, or "morning" gets rejected for ending in -ing and you
+   end up with "before am". */
+function nounForm(e){
+  if(PLACES.has(e.label) || TIMES.has(e.label)) return e.label;
+  return e.group.find(w => !ADJISH.test(w)) || e.label;
+}
+function adjForm(e){ return e.group.find(w => ADJISH.test(w)) || e.label; }
+
+/* Phrase shapes taken from examples that read well:
+     Hurricane on the Beach      subject + place
+     Crying in the Shower        subject + place
+     Foggy Picnic at Dusk        adjective + subject + time
+     Apocalyptic Euphoria        adjectival subject + subject
+     Club Chaos                  place + subject, no preposition
+     Stars in Winter             subject + time
+     Forest in my Bedroom        a place inside another place
+     Driving with a Blunt        subject + subject
+   Definite articles throughout — "on the beach", not "on a beach". */
+const ON_PLACES = new Set(['beach','ocean','highway','mountain','field','river','stadium']);
+/* "at dusk" works, "at Friday" does not */
+const CLOCK   = new Set(['dawn','morning','noon','dusk','evening','night','midnight','2am']);
+const DAYS    = new Set(['weekend','sunday','monday','friday']);
+const HOMEY   = new Set(['bedroom','kitchen','attic','shower','garden','cabin']);
+function timePhrase(w){
+  const opts = CLOCK.has(w) ? [`at ${w}`, `at ${w}`, `before ${w}`, `after ${w}`]
+             : DAYS.has(w)  ? [`on ${w}`, `on ${w}`, `before ${w}`, `after ${w}`]
+             :                [`in ${w}`, `in ${w}`, `during ${w}`, `before ${w}`];
+  return opts[Math.floor(Math.random() * opts.length)];
+}
+const PLURAL = { star:'stars', shadow:'shadows', ghost:'ghosts', dream:'dreams' };
+const SMALLWORDS = new Set(['on','in','at','the','a','an','with','near','under','through','my',
+  'than','of','before','after','during','inside','into','beside']);
+
+function placePhrase(w){
+  const opts = ON_PLACES.has(w)
+    ? [`on the ${w}`, `on the ${w}`, `near the ${w}`, `at the ${w}`]
+    : [`in the ${w}`, `in the ${w}`, `inside the ${w}`, `near the ${w}`, `through the ${w}`, `under the ${w}`];
+  return opts[Math.floor(Math.random() * opts.length)];
+}
+function titleCase(s){
+  return s.split(' ').map((w,i) => (i > 0 && SMALLWORDS.has(w)) ? w : w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+const recentVibes = [];
+
+function nearTo(vec, filter, n){
+  return LEX_ENTRIES.filter(filter)
+    .map(e => ({ e, s: fit(e.vec, vec) }))
+    .sort((a,b) => b.s - a.s).slice(0, n).map(x => x.e);
+}
+/* biased toward the closest matches, but with a long enough tail that a
+   hundred pulls on one genre don't repeat */
+function pick(arr){ return arr[Math.floor(Math.pow(Math.random(), 1.7) * arr.length)] || arr[0]; }
+
+function genreVibe(genre){
+  const gv = GENRE_VEC[genre];
+  if(!gv) return '';
+  const isSetting = e => PLACES.has(e.label) || TIMES.has(e.label);
+  const heads    = nearTo(gv, e => e.pos === 'n' && !isSetting(e), 26);
+  const places   = nearTo(gv, e => PLACES.has(e.label), 18);
+  const times    = nearTo(gv, e => TIMES.has(e.label), 10);
+  const adjs     = nearTo(gv, e => e.pos === 'a', 22);
+  const adjNouns = nearTo(gv, e => e.pos === 'n' && e.group.some(w => ADJISH.test(w)), 20);
+  if(!heads.length) return '';
+
+  for(let attempt = 0; attempt < 50; attempt++){
+    const h = pick(heads);
+    let sub = nounForm(h);
+    if(PLURAL[sub] && Math.random() < 0.35) sub = PLURAL[sub];
+    const roll = Math.random();
+    let out;
+
+    if(roll < 0.26 && places.length){                     // Hurricane on the Beach
+      out = `${sub} ${placePhrase(nounForm(pick(places)))}`;
+    }else if(roll < 0.40 && adjNouns.length){             // Apocalyptic Euphoria
+      out = `${adjForm(pick(adjNouns))} ${sub}`;
+    }else if(roll < 0.54 && places.length){               // Club Chaos
+      out = `${nounForm(pick(places))} ${sub}`;
+    }else if(roll < 0.70 && times.length){                // Stars in Winter
+      out = `${sub} ${timePhrase(nounForm(pick(times)))}`;
+    }else if(roll < 0.84 && adjs.length && times.length){ // Foggy Picnic at Dusk
+      const t = nounForm(pick(times));
+      out = `${adjForm(pick(adjs))} ${sub} ${timePhrase(t)}`;
+    }else if(roll < 0.92 && places.length >= 2){          // Forest in my Bedroom
+      const home = places.filter(e => HOMEY.has(e.label));
+      const away = places.filter(e => !HOMEY.has(e.label));
+      if(!home.length || !away.length) continue;
+      out = `${nounForm(pick(away))} in my ${nounForm(pick(home))}`;
+    }else if(adjs.length){                                // Windy Ache
+      out = `${adjForm(pick(adjs))} ${sub}`;
+    }else{
+      out = sub;
+    }
+
+    out = out.replace(/\ba (?=[aeiou])/g, 'an ');
+    if(/\b(\w+)\s+\1\b/.test(out)) continue;              // no repeated word
+    out = titleCase(out);
+    if(recentVibes.includes(out)) continue;
+    recentVibes.push(out);
+    if(recentVibes.length > 80) recentVibes.shift();
+    return out;
+  }
+  return titleCase(nounForm(heads[0]));
+}
+
+/* ═══════════════════════════════════════════════════════════════════
    PARSING THE VIBE
    ═══════════════════════════════════════════════════════════════════ */
 const PREPS = new Set(['on','in','at','by','under','over','during','with','near','through','after','before','inside','beneath','against','into','from','beside','among','across','below','above','around','toward','towards','while','amid','atop']);
@@ -1391,7 +1568,8 @@ async function build(){
     renderReading(concepts, matched, unknown);
     renderSet(current.seq, concepts);
     $('#plName').value = text.replace(/\b\w/g, m => m.toUpperCase());
-    $('#bio').value = makeBio(concepts);
+    const pg = playlistGenre(current.seq);
+    $('#bio').value = makeBio(concepts, pg && pg.share >= 0.22 ? pg.label : null);
     makeCover(concepts, text);
 
     const isNew = current.seq.filter(t => t.neu).length;
@@ -1563,7 +1741,7 @@ function conceptFrags(c, max){
   return out.reverse();
 }
 
-function makeBio(concepts){
+function makeBio(concepts, genre){
   let parts;
   if(concepts.length > 1){
     // modifiers first, head concept last — it lands the line
@@ -1582,7 +1760,8 @@ function makeBio(concepts){
     return d ? WORDS[d][Math.min(4, Math.floor(v[d]*5))] : 'hard to place';
   }
   while(parts.join(', ').split(/\s+/).length > 10 && parts.length > 1) parts.shift();
-  return parts.join(', ');
+  const line = parts.join(', ');
+  return genre ? `${genre}-forward · ${line}` : line;
 }
 
 /* One grade for every cover: duotone into the dusk palette, vignette, grain.
@@ -1841,6 +2020,22 @@ $('#stopBtn').onclick   = () => { abort = true; libLog('Stopped. Progress is sav
 $('#clearFeat').onclick = () => { features = {}; genres = {}; save(K.feat,{}); save(K.gen,{}); paint(); libLog('Feature cache cleared.'); };
 $('#clearAll').onclick  = () => { Object.values(K).forEach(k => localStorage.removeItem(k)); location.reload(); };
 $('#buildBtn').onclick  = build;
+(function(){
+  const sel = $('#genreSel');
+  Object.keys(GENRE_VEC).map(pretty).sort().forEach(lbl => {
+    const key = Object.keys(GENRE_VEC).find(k => pretty(k) === lbl);
+    const o = document.createElement('option'); o.value = key; o.textContent = lbl; sel.appendChild(o);
+  });
+  const spin = () => {
+    if(!sel.value) return;
+    const v = genreVibe(sel.value);
+    if(!v) return;
+    $('#vibe').value = v;
+    $('#genreNote').textContent = `A ${pretty(sel.value)} vibe. Edit it, or press "Another vibe" for a different one.`;
+  };
+  sel.onchange = spin;
+  $('#genreAgain').onclick = spin;
+})();
 document.querySelectorAll('#srcSeg button').forEach(b => {
   b.onclick = () => {
     document.querySelectorAll('#srcSeg button').forEach(x => x.classList.remove('on'));
