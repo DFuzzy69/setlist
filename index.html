@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 35</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 37</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -820,30 +820,29 @@ async function featuresFor(list){
              .filter(t => t.f);
 }
 
-/* Tracks by your top artists, via search — artist top-tracks was removed
-   Feb 2026, but search still answers artist:"Name". */
-async function topArtistTracks(exclude){
-  const ids = Object.keys(topArt || {}).sort((a,b) => topArt[b] - topArt[a]).slice(0, 10);
+/* More from specific artists, via search — artist top-tracks was removed
+   Feb 2026, but search still answers artist:"Name". Used to deepen the
+   artists that already cleared the vibe, whose genre is cached already. */
+async function moreFrom(artists, exclude){
   const out = [];
-  for(const aid of ids){
-    const name = topNames[aid];
-    if(!name) continue;
+  for(const a of artists){
+    if(!a.name || !a.id) continue;
     try{
-      const r = await sp(`/search?q=${encodeURIComponent('artist:"' + name + '"')}&type=track&limit=10`);
+      const r = await sp(`/search?q=${encodeURIComponent('artist:"' + a.name + '"')}&type=track&limit=10`);
       for(const t of (r?.tracks?.items || [])){
         if(!t.id || exclude.has(t.id)) continue;
-        if(!(t.artists||[]).some(a => a.id === aid)) continue;   // search is fuzzy
-        out.push({ id:t.id, name:t.name, artists:t.artists.map(a => ({id:a.id, name:a.name})) });
+        if(!(t.artists||[]).some(x => x.id === a.id)) continue;   // search is fuzzy
+        out.push({ id:t.id, name:t.name, artists:t.artists.map(x => ({id:x.id, name:x.name})) });
         exclude.add(t.id);
       }
-    }catch(e){}
-    await sleep(90);
+    }catch(e){ if(/rate-limiting/.test(e.message)) break; }
+    await sleep(120);
   }
   return out;
 }
 
 /* Fill remaining slots, best-first, respecting the artist cap. */
-function topUp(picked, ranked, n, tag){
+function topUp(picked, ranked, n, tag, maxPer = 2){
   const seen = new Set(picked.map(t => t.id));
   const byArtist = {};
   picked.forEach(t => { const a = t.artists[0]?.id; if(a) byArtist[a] = (byArtist[a]||0) + 1; });
@@ -852,9 +851,9 @@ function topUp(picked, ranked, n, tag){
     const t = r.t;
     if(seen.has(t.id)) continue;
     const a = t.artists[0]?.id;
-    if(a && (byArtist[a]||0) >= 2) continue;
+    if(a && (byArtist[a]||0) >= maxPer) continue;
     seen.add(t.id); if(a) byArtist[a] = (byArtist[a]||0) + 1;
-    picked.push({ ...t, _cf: r.cf, _ts: r.ts, [tag]: true });
+    picked.push({ ...t, _cf: r.cf, _ts: r.ts, _gf: r.gf, [tag]: true });
   }
   return picked;
 }
@@ -1742,7 +1741,7 @@ async function mbGenres(name){
   return tags;
 }
 
-async function ensureGenres(tracks, cap = 50){
+async function ensureGenres(tracks, cap = 220){
   const seen = new Set(), need = [];
   for(const t of tracks){
     for(const a of t.artists){
@@ -1828,11 +1827,15 @@ function rankFused(concepts, pool, disc){
 /* Keep tracks that actually are the main subject and clear their language bar.
    One ranked list — the fused score already orders "does both" above "does one",
    so nothing needs bucketing. */
+/* Fail CLOSED on genre. An unchecked artist used to pass the veto, which
+   meant every artist the lookup hadn't reached yet got in on audio features
+   alone — and features can't tell a pop ballad from a storm. Unknown genre
+   is now a rejection: a shorter playlist beats a padded one. */
 function eligible(ranked, best, gFloor){
   return ranked.filter(r =>
     r.cf[0] >= HEAD_MIN &&
     shapeOk(r.cf) &&
-    (r.gf === null || r.gf >= gFloor) &&
+    r.gf !== null && r.gf >= gFloor &&
     r.raw >= langBar(r.t, best));
 }
 
@@ -1886,7 +1889,7 @@ function interleave(ranked, weights, n, maxPerArtist = 2, quotas = null){
     const aid = tr.artists[0] ? tr.artists[0].id : tr.id;
     if((byArtist[aid]||0) >= maxPerArtist) continue;
     seen.add(tr.id); byArtist[aid] = (byArtist[aid]||0) + 1; taken[pick]++;
-    out.push({ ...tr, _c: pick, _s: row.s, _cf: row.cf, _ts: row.ts });
+    out.push({ ...tr, _c: pick, _s: row.s, _cf: row.cf, _ts: row.ts, _gf: row.gf });
   }
   out.taken = taken;
   return out;
@@ -1955,7 +1958,7 @@ async function build(){
     let rMine  = src.mine.length  ? rankFused(concepts, src.mine, disc)  : [];
     let rFresh = src.fresh.length ? rankFused(concepts, src.fresh, disc) : [];
     /* only the contenders need genres — then rank again with them known */
-    await ensureGenres([...rMine.slice(0, n * 3), ...rFresh.slice(0, n * 3)].map(r => r.t));
+    await ensureGenres([...rMine.slice(0, n * 6), ...rFresh.slice(0, n * 6)].map(r => r.t));
     if(rMine.length)  rMine  = rankFused(concepts, src.mine, disc);
     if(rFresh.length) rFresh = rankFused(concepts, src.fresh, disc);
     const best = Math.max(0.0001, ...rMine.map(r => r.raw), ...rFresh.map(r => r.raw));
@@ -1979,39 +1982,39 @@ async function build(){
     wantMine = quotas[0];
 
     const avail = streams.reduce((a, st) => a + st.length, 0);
+    const unchecked = [...rMine, ...rFresh].filter(r => r.gf === null && r.cf[0] >= HEAD_MIN).length;
     let picked = interleave(streams, weights, n, 2, quotas);
 
-    /* My library came up short: widen in order of closeness to you —
-       songs you've heard but never saved, then your top artists' catalogue,
-       then similar new music. Every candidate faces the same vibe gates. */
-    let heardCt = 0, topCt = 0, freshCt = 0;
+    /* Short is fine — padding is not. Widen in order of how likely you are to
+       already love it, each stage facing the full gate (head floor, shape,
+       genre veto, language):
+         1. songs you've heard but never saved
+         2. more from the artists that already cleared the vibe (proven to fit,
+            genres already cached) — NOT your global top artists, who might be pop
+         3. similar songs from outside your library                            */
     if(source === 'lib' && picked.length < n){
-      vibeLog(`${picked.length} of ${n} from your library — pulling in songs you've heard…`);
+      vibeLog(`${picked.length} of ${n} from your library — checking songs you've heard…`);
       await loadHeard();
       const exclude = new Set([...library.map(t => t.id), ...picked.map(t => t.id)]);
       const hPool = await featuresFor(Object.values(heard || {}).filter(t => !exclude.has(t.id)));
-      await ensureGenres(hPool, 40);
-      const hRank = eligible(rankFused(concepts, hPool, disc), best, gFloor);
-      const before = picked.length;
-      picked = topUp(picked, hRank, n, 'heardTag');
-      heardCt = picked.length - before;
+      await ensureGenres(hPool, 80);
+      picked = topUp(picked, eligible(rankFused(concepts, hPool, disc), best, gFloor), n, 'heardTag');
 
       if(picked.length < n){
-        vibeLog(`Still ${n - picked.length} short — checking your top artists…`);
+        vibeLog(`Still ${n - picked.length} short — more from these artists…`);
         picked.forEach(t => exclude.add(t.id));
-        const aPool = await featuresFor(await topArtistTracks(exclude));
-        const aRank = eligible(rankFused(concepts, aPool, disc), best, gFloor);
-        const b2 = picked.length;
-        picked = topUp(picked, aRank, n, 'neu');
-        topCt = picked.length - b2;
+        const seenA = new Set(), fitArtists = [];
+        for(const t of picked) for(const a of t.artists){
+          if(a.id && !seenA.has(a.id)){ seenA.add(a.id); fitArtists.push(a); }
+        }
+        const aPool = await featuresFor(await moreFrom(fitArtists.slice(0, 12), exclude));
+        picked = topUp(picked, eligible(rankFused(concepts, aPool, disc), best, gFloor), n, 'neu', 3);
       }
       if(picked.length < n){
-        vibeLog(`Still short — finding similar new music…`);
+        vibeLog(`Still short — finding similar songs…`);
         const fresh2 = await findNew(concepts, concepts.map(c => rankFor(c, mine, 0.5)), n - picked.length);
-        const fRank = eligible(rankFused(concepts, fresh2, disc), best, gFloor);
-        const b3 = picked.length;
-        picked = topUp(picked, fRank, n, 'neu');
-        freshCt = picked.length - b3;
+        await ensureGenres(fresh2, 80);
+        picked = topUp(picked, eligible(rankFused(concepts, fresh2, disc), best, gFloor), n, 'neu');
       }
     }
     current = { seq: sequence(picked), concepts, text };
@@ -2032,7 +2035,8 @@ async function build(){
       (heardN ? `, ${heardN} you've heard` : '') + (isNew ? `, ${isNew} new to you` : '');
     msg += '.';
     if(current.seq.length < n){
-      msg += ` That's every song that truly fits — a broader vibe would find more.`;
+      msg += ` That's every song that truly fits.`;
+      if(unchecked) msg += ` ${unchecked} more were skipped because their artist's genre isn't known yet — build again and they'll be checked.`;
     }
     if(wantMine !== null && gotMine < wantMine - 1){
       msg += ` Your library ran low on this vibe, so new songs filled the gap.`;
@@ -2107,7 +2111,7 @@ function renderSet(seq, concepts){
                  + (t.neu ? '<span class="pill newp">new</span>' : '');
     return `<li>
       <div><div class="t">${esc(t.name)}</div><div class="a">${esc(t.artists.map(a=>a.name).join(', '))}</div></div>
-      <div class="m">${badges}${match !== null ? `<span class="pill">${match}%</span>` : ''}<span class="tech">${tech}${bpm}${t.f.est ? ' · <span class="est">estimated</span>' : ''}${t._ts !== undefined ? ' · you ' + Math.round(t._ts*100) : ''}</span></div>
+      <div class="m">${badges}${match !== null ? `<span class="pill">${match}%</span>` : ''}<span class="tech">${tech}${bpm}${t.f.est ? ' · <span class="est">estimated</span>' : ''}${t._ts !== undefined ? ' · you ' + Math.round(t._ts*100) : ''}${t._gf !== undefined && t._gf !== null ? ' · genre ' + Math.round(t._gf*100) : ''}</span></div>
     </li>`;
   }).join('');
   $('#setLog').textContent = '';
