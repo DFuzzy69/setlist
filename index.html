@@ -158,7 +158,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 14</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 15</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -213,28 +213,6 @@ details[open] summary{margin-bottom:12px}
         <button data-src="lib" class="on">My library</button>
         <button data-src="both">Both</button>
         <button data-src="new">New to me</button>
-      </div>
-    </div>
-    <div style="flex:1 1 100%">
-      <label class="f">Match quality</label>
-      <div class="seg" id="strictSeg">
-        <button data-strict="1" class="on">Strong matches only</button>
-        <button data-strict="0">Always fill the playlist</button>
-      </div>
-    </div>
-    <div style="flex:1 1 100%">
-      <label class="f">Multi-part vibes</label>
-      <div class="seg" id="blendSeg">
-        <button data-blend="fuse" class="on">Every song does both</button>
-        <button data-blend="alt">Some of each</button>
-      </div>
-    </div>
-    <div style="flex:1 1 100%">
-      <label class="f">Language</label>
-      <div class="seg" id="langSeg">
-        <button data-lang="lean" class="on">Lean English</button>
-        <button data-lang="strict">English &amp; Spanish only</button>
-        <button data-lang="any">Any</button>
       </div>
     </div>
     <div>
@@ -1095,10 +1073,13 @@ const ES_SHAPE = /(cion\b|ando\b|iendo\b|ito\b|ita\b|itos\b|itas\b|mente\b|dad\b
 const FR_SHAPE = /\b(vous|nous|toujours|rien|coeur|oui|jamais|encore|amour)\b|(ez\b|eux\b|oux\b)/;
 const DE_SHAPE = /\b(luft|liebe|nacht|herz|welt|mein|dein|kein|alles|wieder|ohne|uber|zeit|leben)/;
 
-let langPref = 'lean';
+/* A track earns its place by how well it matches, and the bar depends on its
+   language. English gets in on a good match; anything else has to be close to
+   the best the vibe can reach. Expressed as a fraction of that best, because
+   what's achievable varies by vibe — "rage" tops out near 0.87, "hurricane on
+   a beach" near 0.73, and a fixed cutoff would ban whole vibes outright. */
+const LANG_BAR = { en: 0.775, es: 0.85, other: 0.90 };
 
-/* Strip accents so "corazón" matches "corazon", but test the raw string first
-   for marks that are themselves the giveaway. */
 function langOf(t){
   const raw = ((t.name || '') + ' ' + t.artists.map(a => a.name).join(' ')).toLowerCase();
   if(NONLATIN.test(raw)) return 'other';
@@ -1110,26 +1091,13 @@ function langOf(t){
   if(ACCENT.test(raw)) return 'other';      // accented but unplaceable — not English
   return 'en';
 }
-function langBonus(t){
-  if(langPref === 'any') return 0;
-  const l = langOf(t);
-  return l === 'en' ? 0.05 : l === 'es' ? 0.02 : -0.15;
-}
-function langAllowed(t){
-  if(langPref !== 'strict') return true;
-  const l = langOf(t);
-  return l === 'en' || l === 'es';
-}
+function langBar(t, best){ return best * (LANG_BAR[langOf(t)] || LANG_BAR.other); }
 
-/* Two ways to handle a multi-concept vibe.
-   FUSE: weighted geometric mean of each concept's fit. Being strong on one
-   and weak on another is punished hard, so what survives satisfies both —
-   an actual hurricane-on-a-beach track, not a hurricane track next to a
-   beach track. Arithmetic averaging would instead reward the midpoint,
-   which is neither thing.
-   ALTERNATE: the old behaviour, each concept ranked on its own. */
-let blendMode = 'fuse';
-let strictMatch = true;
+/* A multi-part vibe is always fused: weighted geometric mean of each concept's
+   fit, so being strong on one and weak on another is punished hard. Averaging
+   would reward the midpoint, which is neither thing. */
+const BOTH_SHARE = 0.85;   // share of the playlist that must satisfy every concept
+const BALANCE    = 0.72;   // weakest concept fit vs strongest, within one track
 
 function conceptFits(concepts, f){ return concepts.map(c => fit(c.vec, f)); }
 
@@ -1142,6 +1110,13 @@ function fuse(concepts, f){
   return Math.exp(s);
 }
 
+/* Does this track do every part of the vibe, rather than one part well? */
+function doesAll(cf){
+  if(cf.length < 2) return true;
+  const mn = Math.min(...cf), mx = Math.max(...cf);
+  return mx > 0 && mn / mx >= BALANCE;
+}
+
 function adjust(t, base, disc){
   const bias = (disc - 0.5) * 2;
   let pen = 0;
@@ -1149,42 +1124,41 @@ function adjust(t, base, disc){
     let h = 0; for(let i = 0; i < t.id.length; i++) h = (h * 31 + t.id.charCodeAt(i)) >>> 0;
     pen = 0.13 + (h % 1000) / 1000 * 0.07;
   }
-  return base - bias * familiarity(t) * 0.30 - pen + langBonus(t);
+  return base - bias * familiarity(t) * 0.30 - pen;
 }
 
-/* One ranked list for a whole source, every concept satisfied at once. */
 function rankFused(concepts, pool, disc){
-  return pool.filter(langAllowed).map(t => {
+  return pool.map(t => {
     const raw = fuse(concepts, t.f);
     return { t, raw, s: adjust(t, raw, disc), cf: conceptFits(concepts, t.f) };
   }).sort((a,b) => b.s - a.s);
 }
 
-/* Only keep tracks close to the best match this vibe can actually reach.
-   A fixed cutoff would be wrong — "rage" tops out near 0.87, "hurricane on a
-   beach" near 0.73 — so the bar is relative to what's achievable. */
-const MATCH_SPREAD = 0.11;
-function applyFloor(streams){
-  let best = 0;
-  streams.forEach(st => st.forEach(r => { if(r.raw > best) best = r.raw; }));
-  const floor = best - MATCH_SPREAD;
-  return streams.map(st => st.filter(r => r.raw === undefined || r.raw >= floor));
+/* Split a ranked source in two: tracks that satisfy every concept, and the
+   remainder — which is re-ranked on the head concept alone, since that's what
+   the extra slots should follow. Both sides must clear their language bar. */
+function partition(ranked, best){
+  const all = [], head = [];
+  for(const r of ranked){
+    if(r.raw < langBar(r.t, best)) continue;
+    (doesAll(r.cf) ? all : head).push(r);
+  }
+  head.sort((a,b) => (b.cf[0] - a.cf[0]) || (b.s - a.s));
+  return [all, head];
 }
 
+/* Single-concept ranking. Only used to pick seed tracks for recommendations,
+   so it applies no language or balance rules — those belong to the playlist. */
 function rankFor(concept, pool, disc){
-  const bias = (disc - 0.5) * 2;     // -1 familiar … +1 discovery
-  return pool.filter(langAllowed).map(t => {
+  const bias = (disc - 0.5) * 2;
+  return pool.map(t => {
     const base = fit(concept.vec, t.f);
-    const fam = familiarity(t);
-    /* Estimated features are a genre centroid, and we search the genres closest
-       to the vibe — so they land dead-on the target and outscore real tracks.
-       Discount them, and jitter so a whole genre doesn't tie at one value. */
     let pen = 0;
     if(t.f.est){
       let h = 0; for(let i = 0; i < t.id.length; i++) h = (h * 31 + t.id.charCodeAt(i)) >>> 0;
       pen = 0.13 + (h % 1000) / 1000 * 0.07;
     }
-    return { t, s: base - bias * fam * 0.30 - pen + langBonus(t) };
+    return { t, s: base - bias * familiarity(t) * 0.30 - pen };
   }).sort((a,b) => b.s - a.s);
 }
 
@@ -1270,45 +1244,55 @@ async function build(){
   $('#buildBtn').disabled = true;
 
   try{
-    let streams, weights, streamConcept, quotas = null, wantMine = null;
-    const fused = blendMode === 'fuse' || concepts.length === 1;
-    const rankSrc = pool => fused ? [rankFused(concepts, pool, disc)] : concepts.map(c => rankFor(c, pool, disc));
-    const wtOf   = scale => fused ? [scale] : concepts.map(c => c.weight * scale);
-    const cIdx   = () => fused ? [0] : concepts.map((c,i) => i);
+    let streams, weights, quotas = null, wantMine = null, wantAll = null;
 
-    if(source === 'lib'){
-      streams = rankSrc(mine); weights = wtOf(1); streamConcept = cIdx();
-    }else{
+    const sourceOf = async () => {
+      if(source === 'lib') return { mine, fresh: [] };
       const seedRanks = concepts.map(c => rankFor(c, mine, 0.5));
-      const fresh = await findNew(concepts, seedRanks, n);
-      if(!fresh.length){
+      const got = await findNew(concepts, seedRanks, n);
+      if(!got.length){
         vibeLog(source === 'new'
           ? 'No new tracks came back. Try a different vibe, or switch back to My library.'
           : 'No new tracks came back — building from your library only.');
-        if(source === 'new'){ $('#buildBtn').disabled = false; return; }
+        if(source === 'new') return null;
+        return { mine, fresh: [] };
       }
-      if(source === 'new' && fresh.length){
-        streams = rankSrc(fresh); weights = wtOf(1); streamConcept = cIdx();
-      }else if(!fresh.length){
-        streams = rankSrc(mine); weights = wtOf(1); streamConcept = cIdx();
-      }else{
-        /* Both: the slider is the mix ratio, not a nudge. Middle means half and half. */
-        const a = rankSrc(mine), b = rankSrc(fresh);
-        streams = a.concat(b);
-        weights = wtOf(1 - disc).concat(wtOf(disc));
-        streamConcept = cIdx().concat(cIdx());
-        const raw = weights.map(w => w * n);
-        quotas = raw.map(Math.floor);
-        let left = n - quotas.reduce((x,y) => x+y, 0);
-        raw.map((v,i) => ({ i, r: v - Math.floor(v) })).sort((x,y) => y.r - x.r)
-           .forEach(x => { if(left > 0){ quotas[x.i]++; left--; } });
-        wantMine = quotas.slice(0, a.length).reduce((x,y) => x+y, 0);
-      }
-    }
+      return source === 'new' ? { mine: [], fresh: got } : { mine, fresh: got };
+    };
 
-    const strong = strictMatch ? applyFloor(streams) : streams;
-    const avail = strong.reduce((a, st) => a + st.length, 0);
-    const picked = interleave(strong, weights, n, 2, quotas).map(t => ({ ...t, _c: streamConcept[t._c] }));
+    const src = await sourceOf();
+    if(!src){ $('#buildBtn').disabled = false; return; }
+
+    const rMine  = src.mine.length  ? rankFused(concepts, src.mine, disc)  : [];
+    const rFresh = src.fresh.length ? rankFused(concepts, src.fresh, disc) : [];
+    const best = Math.max(0.0001, ...rMine.map(r => r.raw), ...rFresh.map(r => r.raw));
+
+    const [aMine, hMine]   = partition(rMine, best);
+    const [aFresh, hFresh] = partition(rFresh, best);
+
+    /* Four streams: satisfies-everything and follows-the-head, for each source.
+       85% of the playlist comes from the first kind. */
+    const mineShare  = src.fresh.length ? (src.mine.length ? 1 - disc : 0) : 1;
+    const freshShare = src.mine.length  ? (src.fresh.length ? disc : 0)    : 1;
+    streams = [aMine, hMine, aFresh, hFresh];
+    weights = [
+      mineShare  * BOTH_SHARE, mineShare  * (1 - BOTH_SHARE),
+      freshShare * BOTH_SHARE, freshShare * (1 - BOTH_SHARE)
+    ];
+    const tot = weights.reduce((a,b) => a+b, 0) || 1;
+    weights = weights.map(w => w / tot);
+
+    const raw = weights.map(w => w * n);
+    quotas = raw.map(Math.floor);
+    let left = n - quotas.reduce((x,y) => x+y, 0);
+    raw.map((v,i) => ({ i, r: v - Math.floor(v) })).sort((x,y) => y.r - x.r)
+       .forEach(x => { if(left > 0){ quotas[x.i]++; left--; } });
+    wantMine = quotas[0] + quotas[1];
+    wantAll  = quotas[0] + quotas[2];
+
+    const avail = streams.reduce((a, st) => a + st.length, 0);
+    const picked = interleave(streams, weights, n, 2, quotas)
+      .map(t => ({ ...t, _head: t._c === 1 || t._c === 3 }));
     current = { seq: sequence(picked), concepts, text };
 
     renderReading(concepts, matched, unknown);
@@ -1319,9 +1303,13 @@ async function build(){
 
     const isNew = current.seq.filter(t => t.neu).length;
     const gotMine = current.seq.length - isNew;
-    let msg = `${current.seq.length} track${current.seq.length===1?'':'s'} · ${gotMine} yours, ${isNew} new.`;
-    if(strictMatch && current.seq.length < n){
-      msg += ` Only ${avail} track${avail===1?'':'s'} matched this vibe strongly enough for ${n} slots — a shorter playlist or a broader vibe would fill it.`;
+    const gotAll = current.seq.filter(t => !t._head).length;
+    const pct = current.seq.length ? Math.round(gotAll / current.seq.length * 100) : 0;
+    let msg = `${current.seq.length} track${current.seq.length===1?'':'s'} · ${gotMine} yours, ${isNew} new`;
+    if(concepts.length > 1) msg += ` · ${pct}% do the whole vibe`;
+    msg += '.';
+    if(current.seq.length < n){
+      msg += ` Only ${avail} track${avail===1?'':'s'} cleared the bar for ${n} slots — a shorter playlist or a broader vibe would fill it.`;
     }
     if(wantMine !== null && gotMine < wantMine - 1){
       msg += ` Wanted ${wantMine} of yours but only ${gotMine} fit — your library ran out of matching tracks (max 2 per artist), so new ones filled the gap.`;
@@ -1388,14 +1376,12 @@ function renderSet(seq, concepts){
   $('#setList').innerHTML = seq.map(t => {
     const bpm = t.f.bpm ? Math.round(t.f.bpm) + ' bpm' : '—';
     let tag = '';
-    if(concepts.length > 1){
-      tag = t._cf
-        ? concepts.map((c,i) => `<span style="color:${HUES[i%HUES.length]}">${esc(c.label.split(' ')[0])} ${Math.round(t._cf[i]*100)}</span>`).join(' ') + ' · '
-        : `<span style="color:${HUES[t._c%HUES.length]}">${esc(concepts[t._c].label.split(' ')[0])}</span> · `;
+    if(concepts.length > 1 && t._cf){
+      tag = concepts.map((c,i) => `<span style="color:${HUES[i%HUES.length]}">${esc(c.label.split(' ')[0])} ${Math.round(t._cf[i]*100)}</span>`).join(' ') + ' · ';
     }
     return `<li>
       <div><div class="t">${esc(t.name)}</div><div class="a">${esc(t.artists.map(a=>a.name).join(', '))}</div></div>
-      <div class="m">${tag}${bpm}${t.f.est ? ' · <span class="est">est</span>' : ''}${t.neu ? ' · <span class="neu">new</span>' : ''}</div>
+      <div class="m">${tag}${bpm}${t.f.est ? ' · <span class="est">est</span>' : ''}${t.neu ? ' · <span class="neu">new</span>' : ''}${t._head ? ' · <span class="est">head</span>' : ''}</div>
     </li>`;
   }).join('');
   $('#setLog').textContent = '';
@@ -1769,24 +1755,6 @@ document.querySelectorAll('#srcSeg button').forEach(b => {
 });
 $('#createBtn').onclick = createPlaylist;
 $('#reroll').onclick = () => { if(current) makeCover(current.concepts, current.text, true); };
-document.querySelectorAll('#strictSeg button').forEach(b => {
-  b.onclick = () => {
-    document.querySelectorAll('#strictSeg button').forEach(x => x.classList.remove('on'));
-    b.classList.add('on'); strictMatch = b.dataset.strict === '1';
-  };
-});
-document.querySelectorAll('#blendSeg button').forEach(b => {
-  b.onclick = () => {
-    document.querySelectorAll('#blendSeg button').forEach(x => x.classList.remove('on'));
-    b.classList.add('on'); blendMode = b.dataset.blend;
-  };
-});
-document.querySelectorAll('#langSeg button').forEach(b => {
-  b.onclick = () => {
-    document.querySelectorAll('#langSeg button').forEach(x => x.classList.remove('on'));
-    b.classList.add('on'); langPref = b.dataset.lang;
-  };
-});
 $('#vibe').addEventListener('keydown', e => { if(e.key === 'Enter') build(); });
 $('#lenSlider').oninput = e => $('#lenVal').textContent = e.target.value + ' tracks';
 $('#discSlider').oninput = e => {
