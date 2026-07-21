@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 32</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 33</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -709,11 +709,7 @@ async function rb(ids){
 async function fetchFeatures(){
   abort = false; busy(true);
   const todo = library.map(t => t.id).filter(id => !(id in features));
-  if(!todo.length){
-    busy(false);
-    await loadAllGenres();          // features done — continue the genre pass
-    return paint();
-  }
+  if(!todo.length){ busy(false); libLog('All set.'); return paint(); }
 
   let done = 0, got = 0;
   for(let i = 0; i < todo.length && !abort; i += RB_BATCH){
@@ -747,44 +743,9 @@ async function fetchFeatures(){
     libLog(`Almost there — filling in the last ${missing.length}…`);
     await genreFallback(missing);
   }
-  busy(false);
-  if(!abort) await loadAllGenres();
-  paint();
+  busy(false); paint();
 }
 
-/* Full artist-genre pass. Audio features can't tell aggression from bigness —
-   a belted pop ballad and a metal track both read loud/fast/dark — so genre is
-   the missing signal, and it needs coverage of the whole library.
-   GET /artists?ids= was REMOVED in Feb 2026, so this is one request per
-   artist — cached hard, throttled, and stoppable; run once, resumable. */
-async function loadAllGenres(){
-  const need = [...new Set(library.flatMap(t => t.artists.map(a => a.id)).filter(id => id && !(id in genres)))];
-  if(!need.length) return;
-  busy(true);
-  libLog(`Getting to know your artists… 0 of ${need.length} (one-time)`);
-  let n = 0, halted = null;
-  try{
-    for(const id of need){
-      if(abort) break;
-      try{ const a = await sp('/artists/' + id); genres[id] = a.genres || []; }
-      catch(e){
-        if(/rate-limiting|session|sign/.test(e.message)){ halted = e.message; break; }
-        genres[id] = [];
-      }
-      n++;
-      progress(n / need.length);
-      libLog(`Getting to know your artists… ${n} of ${need.length} (one-time)`);
-      if(n % 40 === 0) save(K.gen, genres);
-      await sleep(320);
-    }
-  }finally{
-    save(K.gen, genres);
-    progress(0); busy(false);
-    libLog(halted ? halted
-         : abort ? 'Stopped — progress saved. Press Continue setup to pick up where you left off.'
-         : 'All set.');
-  }
-}
 
 async function genreFallback(missing){
   const need = [...new Set(missing.flatMap(t => t.artists.map(a => a.id)).filter(id => id && !(id in genres)))];
@@ -1751,6 +1712,36 @@ function adjust(t, base, disc){
   return base + TASTE_W * taste(t.f) - bias * familiarity(t) * 0.45 - pen;
 }
 
+/* Genres are fetched on demand — only the artists in contention for THIS
+   playlist, capped per build, cached forever. The full-library scan was
+   retired: Development Mode rate limits made hundreds of back-to-back
+   artist calls a losing game. The pace tunes itself: back off when Spotify
+   pushes, speed up when it doesn't. */
+let genrePace = 650;
+async function ensureGenres(tracks, cap = 90){
+  const need = [...new Set(tracks.flatMap(t => t.artists.map(a => a.id))
+    .filter(id => id && !id.startsWith('x:') && !(id in genres)))].slice(0, cap);
+  for(let i = 0; i < need.length; i++){
+    if(abort) break;
+    try{
+      const a = await sp('/artists/' + need[i]);
+      genres[need[i]] = a.genres || [];
+      genrePace = Math.max(420, genrePace * 0.97);
+    }catch(e){
+      if(/rate-limiting/.test(e.message)){
+        genrePace = Math.min(4000, genrePace * 1.8);
+        vibeLog('Spotify is rate-limiting — building with what we have. It fills in more next time.');
+        break;
+      }
+      genres[need[i]] = [];
+    }
+    if(i % 5 === 0) vibeLog(`Checking artists… ${i + 1} of ${need.length}`);
+    if(i % 40 === 39) save(K.gen, genres);
+    await sleep(genrePace);
+  }
+  save(K.gen, genres);
+}
+
 /* What genre does this artist actually play, and does that genre live anywhere
    near the vibe? Answered in the same 8 dimensions as everything else. */
 function genreFitOf(t, vec){
@@ -1918,8 +1909,12 @@ async function build(){
     const src = await sourceOf();
     if(!src){ $('#buildBtn').disabled = false; return; }
 
-    const rMine  = src.mine.length  ? rankFused(concepts, src.mine, disc)  : [];
-    const rFresh = src.fresh.length ? rankFused(concepts, src.fresh, disc) : [];
+    let rMine  = src.mine.length  ? rankFused(concepts, src.mine, disc)  : [];
+    let rFresh = src.fresh.length ? rankFused(concepts, src.fresh, disc) : [];
+    /* only the contenders need genres — then rank again with them known */
+    await ensureGenres([...rMine.slice(0, n * 3), ...rFresh.slice(0, n * 3)].map(r => r.t));
+    if(rMine.length)  rMine  = rankFused(concepts, src.mine, disc);
+    if(rFresh.length) rFresh = rankFused(concepts, src.fresh, disc);
     const best = Math.max(0.0001, ...rMine.map(r => r.raw), ...rFresh.map(r => r.raw));
 
     const gFloor = genreFloor(concepts[0].vec);
@@ -1952,6 +1947,7 @@ async function build(){
       await loadHeard();
       const exclude = new Set([...library.map(t => t.id), ...picked.map(t => t.id)]);
       const hPool = await featuresFor(Object.values(heard || {}).filter(t => !exclude.has(t.id)));
+      await ensureGenres(hPool, 40);
       const hRank = eligible(rankFused(concepts, hPool, disc), best, gFloor);
       const before = picked.length;
       picked = topUp(picked, hRank, n, 'heardTag');
