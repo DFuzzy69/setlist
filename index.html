@@ -142,6 +142,9 @@ ol.set .m{font-family:'DM Mono',monospace;font-size:10px;color:#5c6478;text-alig
 .seg button.on{background:var(--sodium);color:#20160a;font-weight:600}
 .seg button:hover:not(.on){background:#232838}
 
+.coverwrap{display:flex;gap:20px;align-items:flex-start;margin-bottom:22px;flex-wrap:wrap}
+.coverwrap canvas{width:150px;height:150px;border-radius:var(--r);border:1px solid var(--haze);flex:0 0 auto}
+.coverwrap > div{flex:1 1 220px}
 .notice{border-left:2px solid var(--sodium);padding:10px 0 10px 14px;margin:14px 0;font-size:13px;color:var(--dim)}
 .notice.err{border-color:var(--bad);color:#e9b3a4}
 code{font-family:'DM Mono',monospace;font-size:13px;background:var(--ink);border:1px solid var(--haze);padding:2px 6px;border-radius:2px;word-break:break-all}
@@ -155,7 +158,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 7</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 8</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -240,6 +243,14 @@ details[open] summary{margin-bottom:12px}
 <!-- SET -->
 <section class="panel hidden" id="setPanel">
   <h2>Running order</h2>
+  <div id="coverWrap" class="coverwrap hidden">
+    <canvas id="cover" width="640" height="640"></canvas>
+    <div>
+      <div class="f" style="margin-bottom:6px">Bio</div>
+      <input type="text" id="bio" maxlength="70" autocomplete="off">
+      <p class="muted" style="margin:8px 0 0;font-size:12px">Cover and bio are generated from the reading. Edit the bio if you like — both go up with the playlist.</p>
+    </div>
+  </div>
   <ol class="set" id="setList"></ol>
   <div class="row" style="margin-top:20px">
     <input type="text" id="plName" style="flex:1 1 260px;width:auto" placeholder="Playlist name">
@@ -261,7 +272,7 @@ const REDIRECT_URI = 'https://dfuzzy69.github.io/setlist/';
 /* Baked in so the app just works on load. Safe to publish: with PKCE there is no
    client secret, and this ID is already visible in the authorize URL. */
 const DEFAULT_CLIENT_ID = 'dbf692a6a9274e3d886495166c4f5116';
-const SCOPES = 'user-library-read playlist-modify-private playlist-modify-public user-top-read';
+const SCOPES = 'user-library-read playlist-modify-private playlist-modify-public user-top-read ugc-image-upload';
 const API   = 'https://api.spotify.com/v1';
 const RECCO = 'https://api.reccobeats.com/v1';
 const AUTH  = 'https://accounts.spotify.com/authorize';
@@ -1176,6 +1187,8 @@ async function build(){
     renderReading(concepts, matched, unknown);
     renderSet(current.seq, concepts);
     $('#plName').value = text.replace(/\b\w/g, m => m.toUpperCase());
+    $('#bio').value = makeBio(concepts);
+    makeCover(concepts, text);
 
     const isNew = current.seq.filter(t => t.neu).length;
     const gotMine = current.seq.length - isNew;
@@ -1257,6 +1270,110 @@ function renderSet(seq, concepts){
 function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 /* ═══════════════════════════════════════════════════════════════════
+   COVER + BIO — both derived from the reading, so they describe the
+   actual playlist rather than decorating it.
+   ═══════════════════════════════════════════════════════════════════ */
+const WORDS = {
+  t:['glacial','unhurried','steady','driving','breakneck'],
+  e:['hushed','gentle','warm','fierce','violent'],
+  v:['bleak','melancholy','level','bright','euphoric'],
+  d:['stiff','loose','swaying','groove-heavy','relentless'],
+  a:['electric','processed','blended','organic','unplugged'],
+  i:['vocal-led','sung','half-wordless','mostly-wordless','wordless'],
+  s:['smooth','sung','talky','spoken','rapped'],
+  l:['airless','close','roomy','live','crowd-lit']
+};
+
+function makeBio(concepts){
+  const v = blended(concepts);
+  const bpm = v.t !== undefined ? Math.round(60 + v.t * 120) : null;
+  const picks = Object.keys(v)
+    .filter(d => d !== 't' && WORDS[d])
+    .map(d => ({ d, far: Math.abs(v[d] - 0.5) }))
+    .sort((a,b) => b.far - a.far).slice(0, 3)
+    .map(x => WORDS[x.d][Math.min(4, Math.floor(v[x.d] * 5))]);
+  if(v.t !== undefined) picks.unshift(WORDS.t[Math.min(4, Math.floor(v.t * 5))]);
+  let out = picks.slice(0, 4).join(', ');
+  if(bpm) out += ' · ' + bpm + ' bpm';
+  // hard cap at 10 words
+  const w = out.split(/\s+/);
+  return w.length > 10 ? w.slice(0, 10).join(' ') : out;
+}
+
+async function makeCover(concepts, text){
+  const cv = $('#cover'), g = cv.getContext('2d');
+  const S = 640, v = blended(concepts);
+  try{ await document.fonts.load('800 60px "Bricolage Grotesque"'); }catch(e){}
+
+  const warmth = v.v === undefined ? 0.5 : v.v;      // brightness of the vibe
+  const push   = v.e === undefined ? 0.5 : v.e;      // how hard it hits
+
+  g.fillStyle = '#0d1018'; g.fillRect(0,0,S,S);
+  const wash = g.createLinearGradient(0, S, S, 0);
+  wash.addColorStop(0, `hsl(${205 - warmth*30}, ${18+push*22}%, ${7+push*7}%)`);
+  wash.addColorStop(1, `hsl(${38 + (1-warmth)*140}, ${30+push*35}%, ${11+push*14}%)`);
+  g.fillStyle = wash; g.fillRect(0,0,S,S);
+
+  // the eight gauges, same instrument as the on-screen readout
+  const dims = DIMS.filter(d => v[d] !== undefined);
+  const top = 300, gap = 34, L = 64, R = S - 64;
+  dims.forEach((d, i) => {
+    const y = top + i * gap;
+    g.strokeStyle = 'rgba(255,255,255,.12)'; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(L, y); g.lineTo(R, y); g.stroke();
+    const x = L + (R - L) * v[d];
+    g.strokeStyle = 'rgba(232,163,74,.30)'; g.lineWidth = 5;
+    g.beginPath(); g.moveTo(L, y); g.lineTo(x, y); g.stroke();
+    g.fillStyle = '#e8a34a';
+    g.fillRect(x - 2, y - 11, 4, 22);
+    g.beginPath(); g.arc(x, y - 15, 5, 0, 7); g.fill();
+  });
+
+  // the words
+  const words = text.trim().split(/\s+/);
+  g.fillStyle = '#fff'; g.textBaseline = 'alphabetic';
+  let size = words.length > 4 ? 62 : 78, line = [], lines = [];
+  g.font = `800 ${size}px "Bricolage Grotesque", system-ui, sans-serif`;
+  for(const w of words){
+    line.push(w);
+    if(g.measureText(line.join(' ')).width > R - L){ line.pop(); if(line.length) lines.push(line.join(' ')); line = [w]; }
+  }
+  if(line.length) lines.push(line.join(' '));
+  lines = lines.slice(0, 4);
+  lines.forEach((ln, i) => g.fillText(ln, L, 118 + i * (size * 0.94)));
+
+  g.font = '500 21px "DM Mono", ui-monospace, monospace';
+  g.fillStyle = 'rgba(255,255,255,.55)';
+  g.fillText(makeBio(concepts).toUpperCase(), L, S - 44);
+
+  $('#coverWrap').classList.remove('hidden');
+  return cv;
+}
+
+function coverBytes(){
+  const cv = $('#cover');
+  for(const q of [0.86, 0.7, 0.55, 0.4]){
+    const b64 = cv.toDataURL('image/jpeg', q).split(',')[1];
+    if(b64.length * 0.75 < 240 * 1024) return b64;
+  }
+  return null;
+}
+
+async function uploadCover(playlistId){
+  const b64 = coverBytes();
+  if(!b64) return 'cover too large';
+  if(Date.now() > tokens.exp) await refresh();
+  const r = await fetch(`${API}/playlists/${playlistId}/images`, {
+    method:'PUT',
+    headers:{ Authorization:'Bearer ' + tokens.access, 'Content-Type':'image/jpeg' },
+    body: b64
+  });
+  if(r.ok || r.status === 202) return null;
+  if(r.status === 403) return 'needs the image permission — press Reconnect once, then save again';
+  return 'cover upload failed (' + r.status + ')';
+}
+
+/* ═══════════════════════════════════════════════════════════════════
    CREATE PLAYLIST
    POST /me/playlists   (users/{id}/playlists removed Feb 2026)
    POST /playlists/{id}/items  (…/tracks removed Feb 2026)
@@ -1265,11 +1382,11 @@ async function createPlaylist(){
   if(!current || !current.seq.length) return;
   const btn = $('#createBtn'); btn.disabled = true;
   const name = $('#plName').value.trim() || current.text;
+  const bio = ($('#bio').value || '').trim().slice(0, 70);
   try{
     setLog('Creating playlist…');
     const pl = await sp('/me/playlists', { method:'POST', body: JSON.stringify({
-      name, public:false,
-      description: `Setlist · "${current.text}" · ` + current.concepts.map(c => `${c.label} ${Math.round(c.weight*100)}%`).join(' + ')
+      name, public:false, description: bio || current.text
     })});
     const uris = current.seq.map(t => 'spotify:track:' + t.id);
     for(let i = 0; i < uris.length; i += 100){
@@ -1282,8 +1399,11 @@ async function createPlaylist(){
       }
       setLog(`Adding tracks… ${Math.min(i+100, uris.length)} of ${uris.length}`);
     }
+    setLog('Uploading cover…');
+    const coverErr = await uploadCover(pl.id);
     const url = pl.external_urls?.spotify || `https://open.spotify.com/playlist/${pl.id}`;
-    $('#setLog').innerHTML = `Saved. <a href="${url}" target="_blank" rel="noopener">Open “${esc(name)}” in Spotify →</a>`;
+    $('#setLog').innerHTML = `Saved. <a href="${url}" target="_blank" rel="noopener">Open “${esc(name)}” in Spotify →</a>`
+      + (coverErr ? `<br><span style="color:var(--bad)">Tracks and bio went up, but the ${coverErr}.</span>` : '');
   }catch(e){
     setLog('Could not save: ' + e.message);
   }
