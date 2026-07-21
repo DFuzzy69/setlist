@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 33</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 35</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -417,8 +417,10 @@ async function sp(path, opts = {}, retry = true, tries = 0){
   if(r.status === 401 && retry){ await refresh(); return sp(path, opts, false); }
   if(r.status === 429){
     /* Spotify's Retry-After can be minutes. Never wait silently, never wait
-       forever — say so, cap it, and give up with a clear message. */
-    if(tries >= 5) throw new Error('Spotify is rate-limiting right now. Wait a few minutes, then press Continue setup — nothing is lost.');
+       forever — say so, cap it, and give up with a clear message. Callers that
+       are merely enriching (genre lookups mid-build) fail on the first push
+       instead of stalling the playlist. */
+    if(opts.fastFail || tries >= 5) throw new Error('Spotify is rate-limiting right now. Wait a few minutes, then press Continue setup — nothing is lost.');
     const wait = Math.min((parseInt(r.headers.get('Retry-After') || '2', 10) + 1) * 1000, 30000);
     try{ libLog(`Spotify asked us to slow down — waiting ${Math.round(wait/1000)}s…`); }catch(e){}
     await sleep(wait); return sp(path, opts, retry, tries + 1);
@@ -1718,26 +1720,67 @@ function adjust(t, base, disc){
    artist calls a losing game. The pace tunes itself: back off when Spotify
    pushes, speed up when it doesn't. */
 let genrePace = 650;
-async function ensureGenres(tracks, cap = 90){
-  const need = [...new Set(tracks.flatMap(t => t.artists.map(a => a.id))
-    .filter(id => id && !id.startsWith('x:') && !(id in genres)))].slice(0, cap);
+
+/* MusicBrainz backup: open, keyless, and rate-limited independently of
+   Spotify — so Spotify choking can no longer switch the genre veto off.
+   Polite pace: ~1 request per second, results cached forever. */
+async function mbGenres(name){
+  const q = encodeURIComponent('artist:"' + name.replace(/"/g, '') + '"');
+  const r = await fetch(`https://musicbrainz.org/ws/2/artist/?query=${q}&limit=1&fmt=json`);
+  if(!r.ok) throw new Error('mb ' + r.status);
+  const a = (await r.json()).artists?.[0];
+  if(!a || a.score < 85) return [];
+  let tags = (a.tags || []).map(t => t.name);
+  if(!tags.length && a.id){
+    await sleep(1100);
+    const r2 = await fetch(`https://musicbrainz.org/ws/2/artist/${a.id}?inc=genres+tags&fmt=json`);
+    if(r2.ok){
+      const j = await r2.json();
+      tags = [...(j.genres || []), ...(j.tags || [])].map(t => t.name);
+    }
+  }
+  return tags;
+}
+
+async function ensureGenres(tracks, cap = 50){
+  const seen = new Set(), need = [];
+  for(const t of tracks){
+    for(const a of t.artists){
+      if(!a.id || a.id.startsWith('x:') || (a.id in genres) || seen.has(a.id)) continue;
+      seen.add(a.id); need.push(a);
+      if(need.length >= cap) break;
+    }
+    if(need.length >= cap) break;
+  }
+  let spotifyOk = true;
   for(let i = 0; i < need.length; i++){
     if(abort) break;
-    try{
-      const a = await sp('/artists/' + need[i]);
-      genres[need[i]] = a.genres || [];
-      genrePace = Math.max(420, genrePace * 0.97);
-    }catch(e){
-      if(/rate-limiting/.test(e.message)){
-        genrePace = Math.min(4000, genrePace * 1.8);
-        vibeLog('Spotify is rate-limiting — building with what we have. It fills in more next time.');
-        break;
+    const a = need[i];
+    if(spotifyOk){
+      try{
+        const r = await sp('/artists/' + a.id, { fastFail: true });
+        genres[a.id] = r.genres || [];
+        genrePace = Math.max(420, genrePace * 0.97);
+        if(i % 5 === 0) vibeLog(`Checking artists… ${i + 1} of ${need.length}`);
+        await sleep(genrePace);
+        continue;
+      }catch(e){
+        if(/rate-limiting/.test(e.message)){
+          spotifyOk = false;
+          genrePace = Math.min(4000, genrePace * 1.8);
+          vibeLog('Spotify wants a breather — switching to the backup source for genres…');
+        }else{
+          genres[a.id] = [];
+          continue;
+        }
       }
-      genres[need[i]] = [];
     }
-    if(i % 5 === 0) vibeLog(`Checking artists… ${i + 1} of ${need.length}`);
+    /* backup: MusicBrainz by artist name */
+    try{ genres[a.id] = a.name ? await mbGenres(a.name) : []; }
+    catch(e){ genres[a.id] = []; }
+    if(i % 5 === 0) vibeLog(`Checking artists (backup source)… ${i + 1} of ${need.length}`);
     if(i % 40 === 39) save(K.gen, genres);
-    await sleep(genrePace);
+    await sleep(1100);
   }
   save(K.gen, genres);
 }
