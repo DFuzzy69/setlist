@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 46</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 48</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -2580,8 +2580,34 @@ function inGenre(t, key){
   }
   if(!score[key]) return false;             // pinned genre not present at all
   const top = Math.max(...Object.values(score));
-  // must be the top family (ties allowed — a true "pop rap" 50/50 still counts)
+  /* Ties pass — an artist tagged "pop rap" is rap enough. Individual songs
+     that don't SOUND like the genre are caught by soundsLike() below, which is
+     how T-Pain stays a rap artist while his country cover stays out. */
   return score[key] >= top;
+}
+
+/* ── song-level check ──
+   Artist tags can't see that one track is a country cover. The track's own
+   audio profile can: compare its fit against every genre family's sound and
+   require the pinned family to be at (or near) the top. Skipped for estimated
+   features, which are derived from the artist's genre and would be circular. */
+const FAM_KEYS = {};
+for(const key in GENRE_VEC){
+  const f = pinFamily(key);
+  if(f){ (FAM_KEYS[f] = FAM_KEYS[f] || []).push(key); }
+}
+const SONIC_MARGIN = 0.10;
+function soundsLike(fam, f){
+  if(!f || f.est || !FAM_KEYS[fam]) return true;
+  let pinBest = 0, allBest = 0;
+  for(const g in FAM_KEYS){
+    for(const k of FAM_KEYS[g]){
+      const s = fit(GENRE_VEC[k], f);
+      if(s > allBest) allBest = s;
+      if(g === fam && s > pinBest) pinBest = s;
+    }
+  }
+  return pinBest >= allBest - SONIC_MARGIN;
 }
 
 function genreFitOf(t, vec){
@@ -2634,10 +2660,10 @@ function eligible(ranked, best, gFloor, pin){
     if(r.cf[0] < HEAD_MIN || !shapeOk(r.cf)) return false;
     if(r.raw < langBar(r.t, best)) return false;
     if(pin){
-      /* Hard lock: the artist must be KNOWN and dominantly this genre. Unknown
-         genre (null) rejects — a locked playlist never pads with unverified
-         artists. This is the whole point of the lock. */
-      return inGenre(r.t, pin) === true;
+      /* Hard lock, two tests: the artist must be known and dominantly this
+         genre, AND this particular song must sound like the genre's territory.
+         The second is what keeps a rap artist's country cover out. */
+      return inGenre(r.t, pin) === true && soundsLike(pin, r.t.f);
     }
     // free-text vibe: the relative genre veto
     return r.gf !== null && r.gf >= gFloor;
