@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 38</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 39</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -1721,6 +1721,7 @@ function adjust(t, base, disc){
    artist calls a losing game. The pace tunes itself: back off when Spotify
    pushes, speed up when it doesn't. */
 let genrePace = 650;
+let pinnedGenre = null;   // genre locked from the dropdown, or null for free-text
 
 /* MusicBrainz backup: open, keyless, and rate-limited independently of
    Spotify — so Spotify choking can no longer switch the genre veto off.
@@ -1809,6 +1810,27 @@ async function ensureGenres(tracks, cap = 220){
 
 /* What genre does this artist actually play, and does that genre live anywhere
    near the vibe? Answered in the same 8 dimensions as everything else. */
+/* Is this track's artist actually in the pinned genre? Direct tag membership —
+   "rap" must appear in an artist genre, so a rock track can't ride in on a
+   hurricane's sonic profile. Genre families count (pop rap, trap → rap). */
+const GENRE_FAMILY = {
+  rap:['rap','hip hop','hip-hop','trap','drill','grime'],
+  metal:['metal','metalcore','deathcore','doom','thrash'],
+  rock:['rock','punk','grunge','emo','hardcore'],
+  pop:['pop'], country:['country','americana','bluegrass'],
+  'r&b':['r&b','rnb','soul','neo soul','quiet storm'],
+  edm:['edm','house','techno','trance','dubstep','drum and bass','electro'],
+  jazz:['jazz','bebop','swing'], folk:['folk','singer-songwriter'],
+  latin:['latin','reggaeton','salsa','bachata'], indie:['indie'],
+  gospel:['gospel','worship'], blues:['blues'], reggae:['reggae','dancehall','ska']
+};
+function inGenre(t, key){
+  const fam = GENRE_FAMILY[key] || [key];
+  const gs = t.artists.flatMap(a => genres[a.id] || []).map(g => g.toLowerCase());
+  if(!gs.length) return null;               // unknown — caller decides
+  return gs.some(g => fam.some(f => g.includes(f)));
+}
+
 function genreFitOf(t, vec){
   const gs = t.artists.flatMap(a => genres[a.id] || []);
   if(!gs.length) return null;
@@ -1854,12 +1876,17 @@ function rankFused(concepts, pool, disc){
    meant every artist the lookup hadn't reached yet got in on audio features
    alone — and features can't tell a pop ballad from a storm. Unknown genre
    is now a rejection: a shorter playlist beats a padded one. */
-function eligible(ranked, best, gFloor){
-  return ranked.filter(r =>
-    r.cf[0] >= HEAD_MIN &&
-    shapeOk(r.cf) &&
-    r.gf !== null && r.gf >= gFloor &&
-    r.raw >= langBar(r.t, best));
+function eligible(ranked, best, gFloor, pin){
+  return ranked.filter(r => {
+    if(r.cf[0] < HEAD_MIN || !shapeOk(r.cf)) return false;
+    if(r.raw < langBar(r.t, best)) return false;
+    if(pin){
+      // dropdown genre lock: must actually be that genre, no exceptions
+      return inGenre(r.t, pin) === true;
+    }
+    // free-text vibe: the relative genre veto
+    return r.gf !== null && r.gf >= gFloor;
+  });
 }
 
 /* Single-concept ranking. Only used to pick seed tracks for recommendations,
@@ -1987,8 +2014,8 @@ async function build(){
     const best = Math.max(0.0001, ...rMine.map(r => r.raw), ...rFresh.map(r => r.raw));
 
     const gFloor = genreFloor(concepts[0].vec);
-    const eMine  = eligible(rMine, best, gFloor);
-    const eFresh = eligible(rFresh, best, gFloor);
+    const eMine  = eligible(rMine, best, gFloor, pinnedGenre);
+    const eFresh = eligible(rFresh, best, gFloor, pinnedGenre);
 
     const mineShare  = src.fresh.length ? (src.mine.length ? 1 - disc : 0) : 1;
     const freshShare = src.mine.length  ? (src.fresh.length ? disc : 0)    : 1;
@@ -2021,7 +2048,7 @@ async function build(){
       const exclude = new Set([...library.map(t => t.id), ...picked.map(t => t.id)]);
       const hPool = await featuresFor(Object.values(heard || {}).filter(t => !exclude.has(t.id)));
       await ensureGenres(hPool, 80);
-      picked = topUp(picked, eligible(rankFused(concepts, hPool, disc), best, gFloor), n, 'heardTag');
+      picked = topUp(picked, eligible(rankFused(concepts, hPool, disc), best, gFloor, pinnedGenre), n, 'heardTag');
 
       if(picked.length < n){
         vibeLog(`Still ${n - picked.length} short — more from these artists…`);
@@ -2031,13 +2058,13 @@ async function build(){
           if(a.id && !seenA.has(a.id)){ seenA.add(a.id); fitArtists.push(a); }
         }
         const aPool = await featuresFor(await moreFrom(fitArtists.slice(0, 12), exclude));
-        picked = topUp(picked, eligible(rankFused(concepts, aPool, disc), best, gFloor), n, 'neu', 3);
+        picked = topUp(picked, eligible(rankFused(concepts, aPool, disc), best, gFloor, pinnedGenre), n, 'neu', 3);
       }
       if(picked.length < n){
         vibeLog(`Still short — finding similar songs…`);
         const fresh2 = await findNew(concepts, concepts.map(c => rankFor(c, mine, 0.5)), n - picked.length);
         await ensureGenres(fresh2, 80);
-        picked = topUp(picked, eligible(rankFused(concepts, fresh2, disc), best, gFloor), n, 'neu');
+        picked = topUp(picked, eligible(rankFused(concepts, fresh2, disc), best, gFloor, pinnedGenre), n, 'neu');
       }
     }
     current = { seq: sequence(picked), concepts, text };
@@ -2060,6 +2087,9 @@ async function build(){
     if(current.seq.length < n){
       msg += ` That's every song that truly fits.`;
       if(unchecked) msg += ` ${unchecked} more were skipped because their artist's genre isn't known yet — build again and they'll be checked.`;
+    }
+    if(pinnedGenre && current.seq.length < n){
+      msg += ` Locked to ${pretty(pinnedGenre)} — that's every ${pretty(pinnedGenre)} song matching this feel.`;
     }
     if(wantMine !== null && gotMine < wantMine - 1){
       msg += ` Your library ran low on this vibe, so new songs filled the gap.`;
@@ -2506,6 +2536,10 @@ $('#stopBtn').onclick   = () => { abort = true; libLog('Stopped. Progress is sav
 $('#clearFeat').onclick = () => { features = {}; genres = {}; save(K.feat,{}); save(K.gen,{}); paint(); libLog('Feature cache cleared.'); };
 $('#clearAll').onclick  = () => { Object.values(K).forEach(k => localStorage.removeItem(k)); location.reload(); };
 $('#buildBtn').onclick  = build;
+$('#vibe').addEventListener('input', () => {
+  // typing your own vibe releases the dropdown pin
+  if(pinnedGenre){ pinnedGenre = null; $('#genreNote').textContent = ''; }
+});
 (function(){
   const sel = $('#genreSel');
   Object.keys(GENRE_VEC).map(pretty).sort().forEach(lbl => {
@@ -2513,12 +2547,14 @@ $('#buildBtn').onclick  = build;
     const o = document.createElement('option'); o.value = key; o.textContent = lbl; sel.appendChild(o);
   });
   const spin = () => {
-    if(!sel.value) return;
+    if(!sel.value){ pinnedGenre = null; $('#genreNote').textContent = ''; return; }
     const v = genreVibe(sel.value);
     if(!v) return;
     $('#vibe').value = v;
-    $('#genreNote').textContent = `A ${pretty(sel.value)} vibe. Edit it, or press "Another vibe" for a different one.`;
+    pinnedGenre = sel.value;
+    $('#genreNote').textContent = `${pretty(sel.value)} only — every song will be ${pretty(sel.value)}. Edit the words to keep the feel; clear the dropdown to drop the genre lock.`;
   };
+  sel.addEventListener('change', () => { if(!sel.value){ pinnedGenre = null; $('#genreNote').textContent = ''; } });
   sel.onchange = spin;
   $('#genreAgain').onclick = spin;
 })();
