@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 41</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 43</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -2486,7 +2486,23 @@ const BAKED_GENRES = {
 'ziggy marley':'reggae',
 'zomboy':'dubstep'
 };
-function bakedGenre(name){ return BAKED_GENRES[(name||'').toLowerCase().trim()] || null; }
+function normName(name){
+  return (name || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')   // strip accents
+    .replace(/&/g, 'and')
+    .replace(/\bfeat\.?\b.*$/, '')                      // drop "feat ..." tails
+    .replace(/[^a-z0-9]+/g, ' ')                          // punctuation -> space
+    .replace(/\bthe\b/g, '')                             // ignore "the"
+    .trim().replace(/\s+/g, ' ');
+}
+/* Build a normalized index of the baked table once. */
+const BAKED_NORM = {};
+for(const k in BAKED_GENRES) BAKED_NORM[normName(k)] = BAKED_GENRES[k];
+function bakedGenre(name){
+  const n = normName(name);
+  return n ? (BAKED_NORM[n] || null) : null;
+}
 
 /* All genre reads go through here: baked table first (instant, offline),
    then whatever the scan/fetch cached. */
@@ -2510,11 +2526,36 @@ const GENRE_FAMILY = {
   latin:['latin','reggaeton','salsa','bachata'], indie:['indie'],
   gospel:['gospel','worship'], blues:['blues'], reggae:['reggae','dancehall','ska']
 };
+/* Which family does a single tag most belong to? "pop rap" contains both
+   "pop" and "rap"; we score every family that matches and let the caller
+   compare. Longer family-word matches count for more so "hip hop" beats a
+   stray "pop". */
+function tagFamilies(tag){
+  const hits = {};
+  for(const fam in GENRE_FAMILY){
+    for(const w of GENRE_FAMILY[fam]){
+      if(tag.includes(w)){ hits[fam] = Math.max(hits[fam] || 0, w.length); }
+    }
+  }
+  return hits;
+}
+
+/* Under a genre pin, an artist belongs to the pinned genre only if it's their
+   DOMINANT family across all their tags — not merely present. This is what
+   stops a country or pop artist with one "country rap" crossover tag from
+   passing a rap lock. */
 function inGenre(t, key){
-  const fam = GENRE_FAMILY[key] || [key];
   const gs = t.artists.flatMap(a => genresOf(a)).map(g => g.toLowerCase());
   if(!gs.length) return null;               // unknown — caller decides
-  return gs.some(g => fam.some(f => g.includes(f)));
+  const score = {};
+  for(const g of gs){
+    const fams = tagFamilies(g);
+    for(const f in fams) score[f] = (score[f] || 0) + fams[f];
+  }
+  if(!score[key]) return false;             // pinned genre not present at all
+  const top = Math.max(...Object.values(score));
+  // must be the top family (ties allowed — a true "pop rap" 50/50 still counts)
+  return score[key] >= top;
 }
 
 function genreFitOf(t, vec){
