@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 43</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 45</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -2526,6 +2526,32 @@ const GENRE_FAMILY = {
   latin:['latin','reggaeton','salsa','bachata'], indie:['indie'],
   gospel:['gospel','worship'], blues:['blues'], reggae:['reggae','dancehall','ska']
 };
+/* Every dropdown genre maps to a pin family. "trap", "drill" → rap;
+   "screamo", "doom" → metal. Without this, pinning a sub-genre that isn't
+   itself a family key (like trap) silently matched nothing and let the whole
+   library through. */
+const FAMILY_OF = {};
+for(const fam in GENRE_FAMILY) for(const w of GENRE_FAMILY[fam]) FAMILY_OF[w] = fam;
+/* extra sub-genre → family mappings the dropdown exposes but the family
+   lists don't name explicitly */
+Object.assign(FAMILY_OF, {
+  trap:'rap', drill:'rap', grime:'rap', 'boom bap':'rap',
+  screamo:'metal', deathcore:'metal', doom:'metal', thrash:'metal',
+  'black metal':'metal', 'death metal':'metal', djent:'metal',
+  hardcore:'rock', shoegaze:'rock', 'post-rock':'rock', 'math rock':'rock',
+  'garage rock':'rock', psych:'rock', 'psychedelic':'rock', prog:'rock',
+  house:'edm', techno:'edm', trance:'edm', dubstep:'edm', 'drum and bass':'edm',
+  'lo-fi':'edm', synthwave:'edm', 'future bass':'edm', electro:'edm',
+  reggaeton:'latin', salsa:'latin', bachata:'latin', 'k-pop':'pop',
+  'new age':'classical', ambient:'classical', soundtrack:'classical',
+  opera:'classical', choral:'classical', drone:'classical',
+  americana:'country', bluegrass:'country', 'quiet storm':'r&b',
+  'neo soul':'r&b', dub:'reggae', dancehall:'reggae', ska:'reggae',
+  bossa:'jazz', swing:'jazz', bebop:'jazz', 'video game':'classical',
+  world:'folk', experimental:'indie', noise:'metal', jungle:'edm'
+});
+function pinFamily(key){ return FAMILY_OF[key] || (GENRE_FAMILY[key] ? key : null); }
+
 /* Which family does a single tag most belong to? "pop rap" contains both
    "pop" and "rap"; we score every family that matches and let the caller
    compare. Longer family-word matches count for more so "hip hop" beats a
@@ -2608,7 +2634,9 @@ function eligible(ranked, best, gFloor, pin){
     if(r.cf[0] < HEAD_MIN || !shapeOk(r.cf)) return false;
     if(r.raw < langBar(r.t, best)) return false;
     if(pin){
-      // dropdown genre lock: must actually be that genre, no exceptions
+      /* Hard lock: the artist must be KNOWN and dominantly this genre. Unknown
+         genre (null) rejects — a locked playlist never pads with unverified
+         artists. This is the whole point of the lock. */
       return inGenre(r.t, pin) === true;
     }
     // free-text vibe: the relative genre veto
@@ -2816,7 +2844,7 @@ async function build(){
       if(unchecked) msg += ` ${unchecked} more were skipped because their artist's genre isn't known yet — build again and they'll be checked.`;
     }
     if(pinnedGenre && current.seq.length < n){
-      msg += ` Locked to ${pretty(pinnedGenre)} — that's every ${pretty(pinnedGenre)} song matching this feel.`;
+      msg += ` Locked to ${pretty(pinnedGenre)} — that's every verified ${pretty(pinnedGenre)} song matching this feel. Nothing outside the genre was added to pad it.`;
     }
     if(wantMine !== null && gotMine < wantMine - 1){
       msg += ` Your library ran low on this vibe, so new songs filled the gap.`;
@@ -3278,8 +3306,10 @@ $('#vibe').addEventListener('input', () => {
     const v = genreVibe(sel.value);
     if(!v) return;
     $('#vibe').value = v;
-    pinnedGenre = sel.value;
-    $('#genreNote').textContent = `${pretty(sel.value)} only — every song will be ${pretty(sel.value)}. Edit the words to keep the feel; clear the dropdown to drop the genre lock.`;
+    pinnedGenre = pinFamily(sel.value);
+    $('#genreNote').textContent = pinnedGenre
+      ? `${pretty(sel.value)} only — every song will be ${pretty(pinnedGenre)}. Edit the words to keep the feel; clear the dropdown to drop the genre lock.`
+      : `${pretty(sel.value)} vibe — this one shapes the feel but isn't a hard genre lock.`;
   };
   sel.addEventListener('change', () => { if(!sel.value){ pinnedGenre = null; $('#genreNote').textContent = ''; } });
   sel.onchange = spin;
