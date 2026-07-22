@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 37</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 38</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -711,7 +711,7 @@ async function rb(ids){
 async function fetchFeatures(){
   abort = false; busy(true);
   const todo = library.map(t => t.id).filter(id => !(id in features));
-  if(!todo.length){ busy(false); libLog('All set.'); return paint(); }
+  if(!todo.length){ busy(false); await scanArtists(); return paint(); }
 
   let done = 0, got = 0;
   for(let i = 0; i < todo.length && !abort; i += RB_BATCH){
@@ -745,7 +745,9 @@ async function fetchFeatures(){
     libLog(`Almost there — filling in the last ${missing.length}…`);
     await genreFallback(missing);
   }
-  busy(false); paint();
+  busy(false);
+  if(!abort) await scanArtists();     // learn every artist's genre, once
+  paint();
 }
 
 
@@ -1741,6 +1743,27 @@ async function mbGenres(name){
   return tags;
 }
 
+/* One-time setup pass: learn every artist's genre so builds never wait on a
+   lookup. Safe to run in full now that ensureGenres falls back to MusicBrainz
+   when Spotify rate-limits — the scan can't stall out anymore. Resumable, and
+   each artist is cached forever. */
+async function scanArtists(){
+  const need = [...new Set(library.flatMap(t => t.artists.map(a => a.id))
+    .filter(id => id && !id.startsWith('x:') && !(id in genres)))];
+  if(!need.length){ libLog('Artists already known. Ready.'); return; }
+  busy(true);
+  libLog(`Getting to know your artists… 0 of ${need.length}`);
+  // ensureGenres already handles Spotify-first, MusicBrainz-backup, pacing,
+  // caching and abort. Feed it fake track objects so it covers every artist.
+  const byId = {};
+  for(const t of library) for(const a of t.artists) if(!byId[a.id]) byId[a.id] = a;
+  await ensureGenres(need.map(id => ({ artists: [byId[id]] })), need.length);
+  busy(false);
+  libLog(abort ? 'Stopped — progress saved. Press Continue setup to finish.' : 'All set — every artist checked.');
+}
+
+const glog = m => { const inSetup = tokens && $('#readPanel').classList.contains('hidden');
+  (inSetup ? libLog : vibeLog)(m); };
 async function ensureGenres(tracks, cap = 220){
   const seen = new Set(), need = [];
   for(const t of tracks){
@@ -1760,14 +1783,14 @@ async function ensureGenres(tracks, cap = 220){
         const r = await sp('/artists/' + a.id, { fastFail: true });
         genres[a.id] = r.genres || [];
         genrePace = Math.max(420, genrePace * 0.97);
-        if(i % 5 === 0) vibeLog(`Checking artists… ${i + 1} of ${need.length}`);
+        if(i % 5 === 0) glog(`Checking artists… ${i + 1} of ${need.length}`);
         await sleep(genrePace);
         continue;
       }catch(e){
         if(/rate-limiting/.test(e.message)){
           spotifyOk = false;
           genrePace = Math.min(4000, genrePace * 1.8);
-          vibeLog('Spotify wants a breather — switching to the backup source for genres…');
+          glog('Spotify busy — switching to the backup source…');
         }else{
           genres[a.id] = [];
           continue;
@@ -1777,7 +1800,7 @@ async function ensureGenres(tracks, cap = 220){
     /* backup: MusicBrainz by artist name */
     try{ genres[a.id] = a.name ? await mbGenres(a.name) : []; }
     catch(e){ genres[a.id] = []; }
-    if(i % 5 === 0) vibeLog(`Checking artists (backup source)… ${i + 1} of ${need.length}`);
+    if(i % 5 === 0) glog(`Checking artists (backup source)… ${i + 1} of ${need.length}`);
     if(i % 40 === 39) save(K.gen, genres);
     await sleep(1100);
   }
