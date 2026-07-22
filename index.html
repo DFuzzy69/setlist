@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 45</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 46</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -2723,6 +2723,7 @@ function sequence(list){
 let current = null, source = 'lib';
 
 async function build(){
+    if(pinnedGenre) vibeLog(`🔒 Locked to ${pretty(pinnedGenre)} — only ${pretty(pinnedGenre)} songs will be used.`);
   const text = $('#vibe').value.trim();
   if(!text) return vibeLog('Type a vibe first.');
   const { concepts, unknown, matched } = parseVibe(text);
@@ -3291,10 +3292,9 @@ $('#stopBtn').onclick   = () => { abort = true; libLog('Stopped. Progress is sav
 $('#clearFeat').onclick = () => { features = {}; genres = {}; save(K.feat,{}); save(K.gen,{}); paint(); libLog('Feature cache cleared.'); };
 $('#clearAll').onclick  = () => { Object.values(K).forEach(k => localStorage.removeItem(k)); location.reload(); };
 $('#buildBtn').onclick  = build;
-$('#vibe').addEventListener('input', () => {
-  // typing your own vibe releases the dropdown pin
-  if(pinnedGenre){ pinnedGenre = null; $('#genreNote').textContent = ''; }
-});
+/* Typing in the vibe box does NOT release the genre lock — picking Trap and
+   then writing your own words is the main use of the lock. Only setting the
+   dropdown back to "Pick a genre…" unlocks. */
 (function(){
   const sel = $('#genreSel');
   Object.keys(GENRE_VEC).map(pretty).sort().forEach(lbl => {
@@ -3307,9 +3307,9 @@ $('#vibe').addEventListener('input', () => {
     if(!v) return;
     $('#vibe').value = v;
     pinnedGenre = pinFamily(sel.value);
-    $('#genreNote').textContent = pinnedGenre
-      ? `${pretty(sel.value)} only — every song will be ${pretty(pinnedGenre)}. Edit the words to keep the feel; clear the dropdown to drop the genre lock.`
-      : `${pretty(sel.value)} vibe — this one shapes the feel but isn't a hard genre lock.`;
+    $('#genreNote').innerHTML = pinnedGenre
+      ? `<b style="color:var(--sodium)">🔒 Locked to ${pretty(pinnedGenre)}</b> — every song will be ${pretty(pinnedGenre)}, whatever words you type. Set the dropdown back to "Pick a genre…" to unlock.`
+      : `${pretty(sel.value)} shapes the feel but isn't a hard genre lock.`;
   };
   sel.addEventListener('change', () => { if(!sel.value){ pinnedGenre = null; $('#genreNote').textContent = ''; } });
   sel.onchange = spin;
