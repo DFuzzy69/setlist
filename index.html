@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 61</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 63</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -228,6 +228,7 @@ details[open] summary{margin-bottom:12px}
   <h2>What are you feeling?</h2>
   <input type="text" id="vibe" placeholder="hurricane on the beach" autocomplete="off" spellcheck="false">
   <p id="aiStatus" class="muted" style="margin:8px 0 0;font-size:12px"></p>
+  <div class="fact hidden factline2" id="factLine2"></div>
   <div class="row" style="margin-top:12px;align-items:flex-end">
     <div style="flex:1 1 200px">
       <label class="f" for="genreSel">Stuck? Start from a genre</label>
@@ -607,14 +608,18 @@ for(let i = FACTS.length - 1; i > 0; i--){
 let factTimer = null, factIdx = 0;
 function factsOn(){
   if(factTimer) return;
-  $('#factLine').classList.remove('hidden');
-  const show = () => { $('#factLine').textContent = '♪  ' + FACTS[factIdx % FACTS.length]; factIdx++; };
+  const els = [$('#factLine'), $('#factLine2')].filter(Boolean);
+  els.forEach(el => el.classList.remove('hidden'));
+  const show = () => {
+    const f = '♪  ' + FACTS[factIdx % FACTS.length]; factIdx++;
+    els.forEach(el => el.textContent = f);
+  };
   show();
   factTimer = setInterval(show, 6000);
 }
 function factsOff(){
   if(factTimer){ clearInterval(factTimer); factTimer = null; }
-  $('#factLine').classList.add('hidden');
+  [$('#factLine'), $('#factLine2')].filter(Boolean).forEach(el => el.classList.add('hidden'));
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -968,6 +973,7 @@ const AI_PROMPT =
   '"genres": 1-3 strictly from this list: [GENRELIST], ' +
   '"artists": 4-6 well-known artists that define the vibe culturally, ' +
   '"tracks": 12-18 real songs that fit, each as "Artist - Title", mixing famous and lesser-known, ' +
+  '"bio": a vivid playlist description under 12 words, no quotes, ' +
   '"language": "en"|"es"|"any"}. ' +
   'Interpret cultural references: "Bubblegum Princess" means sugary teen pop / hyperpop — bright, fast, danceable, sung.';
 let aiRead = null;   // this build's interpretation, if any
@@ -1069,6 +1075,7 @@ async function interpretVibe(text){
     out.genres  = (out.genres || []).map(g => String(g).toLowerCase()).filter(g => GENRE_VEC[g]).slice(0, 3);
     out.artists = (out.artists || []).map(a => String(a)).slice(0, 6);
     out.tracks  = (out.tracks || []).map(t => String(t)).filter(t => /.+[-–—].+/.test(t)).slice(0, 18);
+    out.bio     = String(out.bio || '').replace(/^["']|["']$/g, '').slice(0, 120);
     /* the model's own sound target — this is what gets scored, no lexicon */
     /* Concept vectors carry ONLY defined dimensions — fit() iterates every key,
        so a stray bpm or null would be scored as a dimension and zero everything. */
@@ -3191,6 +3198,11 @@ function sequence(list){
 let current = null, source = 'lib';
 
 async function build(){
+  factsOn();
+  try{ await buildInner(); } finally { factsOff(); }
+}
+
+async function buildInner(){
     buildNonce = (Math.random() * 2147483647) | 0;
     if(pinnedGenre) vibeLog(`🔒 Locked to ${pretty(pinnedGenre)} — only ${pretty(pinnedGenre)} songs will be used.`);
   const text = $('#vibe').value.trim();
@@ -3287,15 +3299,26 @@ async function build(){
     if(rFresh.length) rFresh = rankFused(concepts, src.fresh, disc);
     let best = Math.max(0.0001, ...rMine.map(r => r.raw), ...rFresh.map(r => r.raw));
     {
+      /* Chase down every candidate blocked ONLY by an unchecked artist. A
+         build that ships 14 of 80 with "83 skipped, build again" is making
+         the user do the loop — do it here instead, targeted at exactly
+         those tracks, until the list can fill or nothing is left to check. */
       const gF0 = genreFloor(concepts[0].vec);
       const pre = pinnedGenre
         || (aiRead && aiRead.genres && aiRead.genres.length
               ? [...new Set(aiRead.genres.map(pinFamily).filter(Boolean))]
               : null);
-      const have = eligible(rMine, best, gF0, pre).length +
-                   eligible(rFresh, best, gF0, pre).length;
-      if(have < n){
-        await ensureGenres([...rMine.slice(0, n * 6), ...rFresh.slice(0, n * 6)].map(r => r.t), 220);
+      for(let round = 0; round < 4; round++){
+        const have = eligible(rMine, best, gF0, pre).length +
+                     eligible(rFresh, best, gF0, pre).length;
+        if(have >= n || abort) break;
+        const pend = [...rMine, ...rFresh].filter(r =>
+          r.gf === null && r.cf[0] >= HEAD_MIN && shapeOk(r.cf) &&
+          r.raw >= best - QUALITY_BAND &&
+          famScores(r.t) === null);
+        if(!pend.length) break;
+        vibeLog(`${have} ready, ${pend.length} waiting on artist checks…`);
+        await ensureGenres(pend.map(r => r.t), 170);
         if(rMine.length)  rMine  = rankFused(concepts, src.mine, disc);
         if(rFresh.length) rFresh = rankFused(concepts, src.fresh, disc);
         best = Math.max(0.0001, ...rMine.map(r => r.raw), ...rFresh.map(r => r.raw));
@@ -3368,7 +3391,10 @@ async function build(){
     renderSet(current.seq, concepts);
     $('#plName').value = text.replace(/\b\w/g, m => m.toUpperCase());
     const pg = playlistGenre(current.seq);
-    $('#bio').value = makeBio(concepts, pg && pg.share >= 0.22 ? pg.label : null);
+    const gpre = pg && pg.share >= 0.22 ? pg.label : null;
+    $('#bio').value = (aiRead && (aiRead.bio || aiRead.words.length))
+      ? (gpre ? gpre + '-forward · ' : '') + (aiRead.bio || aiRead.words.join(', '))
+      : makeBio(concepts, gpre);
     makeCover(concepts, text);
 
     const isNew = current.seq.filter(t => t.neu).length;
