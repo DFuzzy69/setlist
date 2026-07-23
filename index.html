@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 54</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 55</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -973,17 +973,37 @@ async function interpretVibe(text){
       { role: 'user', content: text }
     ]
   };
-  try{
+  const grab = async (fn) => {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 9000);
-    const r = await fetch('https://text.pollinations.ai/openai', {
+    try{ return await fn(ac.signal); } finally { clearTimeout(timer); }
+  };
+  let raw = null;
+  /* form 1: the chat endpoint */
+  try{
+    const r = await grab(signal => fetch('https://text.pollinations.ai/openai', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body), signal: ac.signal
-    });
-    clearTimeout(timer);
-    if(!r.ok) return null;
-    const j = await r.json();
-    const raw = (j.choices?.[0]?.message?.content || '').replace(/```json|```/g, '').trim();
+      body: JSON.stringify(body), signal
+    }));
+    if(r.ok){
+      const j = await r.json();
+      raw = (j.choices?.[0]?.message?.content || '');
+    }
+  }catch(e){}
+  /* form 2: the plain GET endpoint — older, simpler, very CORS-tolerant */
+  if(!raw){
+    try{
+      const q = encodeURIComponent(
+        'Reply with ONLY a JSON object, no prose: {"words": 2-4 plain English feeling words for this playlist vibe, ' +
+        '"genres": 1-3 strictly from [' + genreList + '], "artists": 4-6 well-known defining artists, "language":"en"|"es"|"any"}. ' +
+        'Vibe: "' + text + '"');
+      const r2 = await grab(signal => fetch('https://text.pollinations.ai/' + q + '?model=openai', { signal }));
+      if(r2.ok) raw = await r2.text();
+    }catch(e){}
+  }
+  if(!raw) return null;
+  try{
+    raw = raw.replace(/```json|```/g, '').trim();
     const m = /\{[\s\S]*\}/.exec(raw);
     if(!m) return null;
     const out = JSON.parse(m[0]);
@@ -993,7 +1013,7 @@ async function interpretVibe(text){
     out.artists = (out.artists || []).map(a => String(a)).slice(0, 6);
     aiCache[key] = out; save(K.ai, aiCache);
     return out;
-  }catch(e){ return null; }   // offline / blocked / slow — the plain pipeline takes over
+  }catch(e){ return null; }   // unparseable — the plain pipeline takes over
 }
 
 /* Seed-artist discovery: search each culturally-defining artist by name and
@@ -3014,8 +3034,10 @@ async function build(){
      defining artists. Its words feed the same scoring engine; nothing about
      the gates changes. If it's unreachable, the plain pipeline carries on. */
   aiRead = null;
-  vibeLog('Reading the vibe…');
+  vibeLog('Interpreting the vibe…');
   aiRead = await interpretVibe(text);
+  vibeLog(aiRead ? 'Interpreted: ' + aiRead.words.join(', ') + (aiRead.genres.length ? ' · ' + aiRead.genres.join(', ') : '')
+                 : 'Interpreter unreachable — using the built-in reading.');
   let parsed, swaps = [];
   if(aiRead){
     const aiText = aiRead.words.join(' ');
