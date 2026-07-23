@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 57</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 58</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -211,6 +211,10 @@ details[open] summary{margin-bottom:12px}
   <div class="fact hidden" id="factLine"></div>
   <details style="margin-top:14px"><summary>Account &amp; data</summary>
     <div class="muted" id="cacheInfo"></div>
+    <div style="margin:12px 0 4px">
+      <label class="f" for="groqKey">Smarter interpreter (optional): Groq API key — free at console.groq.com</label>
+      <input type="password" id="groqKey" placeholder="gsk_…" autocomplete="off">
+    </div>
     <div class="row" style="margin-top:10px">
       <button id="forget2">Sign out</button>
       <button id="clearFeat">Re-scan my songs</button>
@@ -223,6 +227,7 @@ details[open] summary{margin-bottom:12px}
 <section class="panel hidden" id="vibePanel">
   <h2>What are you feeling?</h2>
   <input type="text" id="vibe" placeholder="hurricane on the beach" autocomplete="off" spellcheck="false">
+  <p id="aiStatus" class="muted" style="margin:8px 0 0;font-size:12px"></p>
   <div class="row" style="margin-top:12px;align-items:flex-end">
     <div style="flex:1 1 200px">
       <label class="f" for="genreSel">Stuck? Start from a genre</label>
@@ -305,7 +310,7 @@ const RECCO = 'https://api.reccobeats.com/v1';
 const AUTH  = 'https://accounts.spotify.com/authorize';
 const TOKEN = 'https://accounts.spotify.com/api/token';
 
-const K = { pho:'sl.pho2', heard:'sl.heard', topn:'sl.topn', dm:'sl.dm', ai2:'sl.ai2', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
+const K = { pho:'sl.pho2', heard:'sl.heard', topn:'sl.topn', dm:'sl.dm', ai2:'sl.ai2', groq:'sl.groq', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
 
 const $ = s => document.querySelector(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -980,10 +985,27 @@ async function interpretVibe(text){
   };
   const grab = async (fn) => {
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 9000);
+    const timer = setTimeout(() => ac.abort(), 18000);
     try{ return await fn(ac.signal); } finally { clearTimeout(timer); }
   };
   let raw = null;
+  /* form 0: Groq, if the user added a free key — much stronger and reliable */
+  const gk = load(K.groq, '');
+  if(gk){
+    try{
+      const r = await grab(signal => fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + gk },
+        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: body.messages,
+                               response_format: { type: 'json_object' } }),
+        signal
+      }));
+      if(r.ok){
+        const j = await r.json();
+        raw = (j.choices?.[0]?.message?.content || '');
+      }
+    }catch(e){}
+  }
   /* form 1: the chat endpoint */
   try{
     const r = await grab(signal => fetch('https://text.pollinations.ai/openai', {
@@ -1707,7 +1729,10 @@ async function resolveVibe(text, parsed){
   /* nothing matched at all? try the whole phrase as an idiom first */
   if(!parsed.concepts.length){
     const whole = await meansLike(text);
-    if(whole) return { text: whole, swaps: [[text, whole]] };
+    /* a multi-word vibe deserves better than one dictionary word — "bubblegum
+       princess" collapsing to "gold" is worse than word-by-word */
+    if(whole && (whole.includes(' ') || !text.trim().includes(' ')))
+      return { text: whole, swaps: [[text, whole]] };
   }
   let out = text;
   for(const w of parsed.unknown){
@@ -3098,9 +3123,12 @@ async function build(){
      the gates changes. If it's unreachable, the plain pipeline carries on. */
   aiRead = null;
   vibeLog('Interpreting the vibe…');
+  $('#aiStatus').textContent = 'Interpreting…';
   aiRead = await interpretVibe(text);
-  vibeLog(aiRead ? 'Interpreted: ' + aiRead.words.join(', ') + (aiRead.genres.length ? ' · ' + aiRead.genres.join(', ') : '')
-                 : 'Interpreter unreachable — using the built-in reading.');
+  $('#aiStatus').innerHTML = aiRead
+    ? `🧠 Interpreted: <b>${esc(aiRead.words.join(', '))}</b>${aiRead.genres.length ? ' · ' + esc(aiRead.genres.join(', ')) : ''}${aiRead.tracks && aiRead.tracks.length ? ' · ' + aiRead.tracks.length + ' songs suggested' : ''}`
+    : '⚠️ Interpreter couldn\'t be reached — built-in reading used. Rebuild to retry.';
+  vibeLog(aiRead ? 'Interpreted.' : 'Interpreter unreachable — using the built-in reading.');
   let parsed, swaps = [];
   if(aiRead && aiRead.vec){
     /* the model described the sound itself — that IS the concept. No lexicon
@@ -3701,6 +3729,8 @@ $('#copyRedir').onclick = async () => {
 $('#clientId').value = clientId;
 $('#clientId').oninput = e => { clientId = e.target.value.trim(); save(K.cid, clientId); };
 $('#connect').onclick = beginAuth;
+$('#groqKey').value = load(K.groq, '') || '';
+$('#groqKey').onchange = () => { save(K.groq, $('#groqKey').value.trim()); aiCache = {}; save(K.ai2, aiCache); };
 $('#forget2').onclick = () => $('#forget').onclick();
 $('#forget').onclick = () => {
   [K.tok, K.top].forEach(k => localStorage.removeItem(k));
