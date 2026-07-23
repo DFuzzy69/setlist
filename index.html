@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 52</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 54</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -305,7 +305,7 @@ const RECCO = 'https://api.reccobeats.com/v1';
 const AUTH  = 'https://accounts.spotify.com/authorize';
 const TOKEN = 'https://accounts.spotify.com/api/token';
 
-const K = { pho:'sl.pho2', heard:'sl.heard', topn:'sl.topn', dm:'sl.dm', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
+const K = { pho:'sl.pho2', heard:'sl.heard', topn:'sl.topn', dm:'sl.dm', ai:'sl.ai', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
 
 const $ = s => document.querySelector(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -914,7 +914,7 @@ function nearestGenres(vec, n){
    Search limit dropped to 10 per request in Feb 2026, so we page for volume. */
 async function catalogSearch(concept, want){
   const out = new Map();
-  const gs = nearestGenres(concept.vec, 3);
+  const gs = (aiRead && aiRead.genres && aiRead.genres.length) ? aiRead.genres : nearestGenres(concept.vec, 3);
   for(const g of gs){
     const est = { ...GENRE_VEC[g], est:true, bpm:null };
     for(const d of DIMS) if(est[d] === undefined) est[d] = null;
@@ -928,8 +928,11 @@ async function catalogSearch(concept, want){
       if(!items.length) break;
       for(const t of items){
         if(!t.id || out.has(t.id)) continue;
+        /* Spotify scores every track 0-100 on popularity. Random-offset genre
+           searches surface plenty of 5-popularity uploads; nobody asked for
+           those. Keep the score and let ranking use it. */
         out.set(t.id, {
-          id: t.id, name: t.name,
+          id: t.id, name: t.name, pop: t.popularity ?? null,
           artists: (t.artists||[]).map(a => ({ id:a.id, name:a.name })),
           _est: est
         });
@@ -941,9 +944,90 @@ async function catalogSearch(concept, want){
   return [...out.values()];
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   INTERPRETER — a real language model reads the vibe first
+   Pollinations is a free, keyless, CORS-open LLM endpoint. It turns
+   "Bubblegum Princess" into feeling-words the lexicon can score, genres
+   worth searching, and seed artists that define the culture — the part a
+   hand-built lexicon can never know. Falls back silently to the plain
+   pipeline when unreachable; every answer is cached.
+   ═══════════════════════════════════════════════════════════════════ */
+let aiCache = load(K.ai, {});
+let aiRead = null;   // this build's interpretation, if any
+
+async function interpretVibe(text){
+  const key = text.toLowerCase().trim();
+  if(key in aiCache) return aiCache[key];
+  const genreList = Object.keys(GENRE_VEC).join(', ');
+  const body = {
+    model: 'openai',
+    messages: [
+      { role: 'system', content:
+        'You translate playlist vibe phrases into JSON for a music engine. ' +
+        'Reply with ONLY a JSON object, no prose, no markdown fences: ' +
+        '{"words": 2-4 plain English feeling/place/weather words that capture the sonic mood, ' +
+        '"genres": 1-3 genre names strictly from this list: [' + genreList + '], ' +
+        '"artists": 4-6 well-known artists that define this vibe culturally, ' +
+        '"language": "en"|"es"|"any" — main language of the scene}. ' +
+        'Interpret cultural references: e.g. "Bubblegum Princess" means sugary teen pop / hyperpop.' },
+      { role: 'user', content: text }
+    ]
+  };
+  try{
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 9000);
+    const r = await fetch('https://text.pollinations.ai/openai', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal: ac.signal
+    });
+    clearTimeout(timer);
+    if(!r.ok) return null;
+    const j = await r.json();
+    const raw = (j.choices?.[0]?.message?.content || '').replace(/```json|```/g, '').trim();
+    const m = /\{[\s\S]*\}/.exec(raw);
+    if(!m) return null;
+    const out = JSON.parse(m[0]);
+    if(!Array.isArray(out.words) || !out.words.length) return null;
+    out.words   = out.words.slice(0, 4).map(w => String(w).toLowerCase());
+    out.genres  = (out.genres || []).map(g => String(g).toLowerCase()).filter(g => GENRE_VEC[g]).slice(0, 3);
+    out.artists = (out.artists || []).map(a => String(a)).slice(0, 6);
+    aiCache[key] = out; save(K.ai, aiCache);
+    return out;
+  }catch(e){ return null; }   // offline / blocked / slow — the plain pipeline takes over
+}
+
+/* Seed-artist discovery: search each culturally-defining artist by name and
+   collect their tracks. This is what makes discovery on-culture rather than
+   merely on-sound. */
+async function seedArtistTracks(names, exclude){
+  const out = [];
+  for(const name of names){
+    try{
+      const r = await sp(`/search?q=${encodeURIComponent('artist:"' + name + '"')}&type=track&limit=10`);
+      for(const t of (r?.tracks?.items || [])){
+        if(!t.id || exclude.has(t.id)) continue;
+        if(!(t.artists||[]).some(x => normName(x.name) === normName(name))) continue;
+        out.push({ id:t.id, name:t.name, pop:t.popularity ?? null,
+                   artists:t.artists.map(x => ({ id:x.id, name:x.name })) });
+        exclude.add(t.id);
+      }
+    }catch(e){ if(/rate-limiting/.test(e.message)) break; }
+    await sleep(110);
+  }
+  return out;
+}
+
 async function findNew(concepts, ranked, want){
   const have = new Set(library.map(t => t.id));
   const found = new Map();
+
+  // 0. the interpreter's seed artists — culture first, sound checks after
+  if(aiRead && aiRead.artists && aiRead.artists.length){
+    vibeLog('Pulling from the artists that define this vibe…');
+    const ex = new Set(have);
+    for(const t of await seedArtistTracks(aiRead.artists, ex))
+      if(!found.has(t.id)) found.set(t.id, t);
+  }
 
   for(let c = 0; c < concepts.length; c++){
     // 1. seeded recommendations — precise, smaller catalog
@@ -1671,7 +1755,18 @@ const DE_SHAPE = /\b(luft|liebe|nacht|herz|welt|mein|dein|kein|alles|wieder|ohne
    a beach" near 0.73, and a fixed cutoff would ban whole vibes outright. */
 const LANG_BAR = { en: 0.775, es: 0.85, other: 0.90 };
 
+/* An artist's genres name their language scene outright — "k-pop" says more
+   than any spelling heuristic. Checked first; the name heuristic is the
+   fallback for artists without genre data. */
+const LANG_GENRES = [
+  ['es', /latin|reggaeton|salsa|bachata|corrido|banda|norte|mariachi|flamenco|spanish|mexic|urbano/],
+  ['other', /k-pop|kpop|j-pop|jpop|j-rock|anime|mandopop|cantopop|c-pop|french|chanson|german|deutsch|italian|italo|russian|turkish|arabic|bollywood|desi|punjabi|thai|viet|indo|sertanejo|mpb|brazilian|funk carioca|afrobeats?|amapiano|schlager/]
+];
 function langOf(t){
+  const gs = t.artists.flatMap(a => genresOf(a)).join(' ').toLowerCase();
+  if(gs){
+    for(const [lang, rx] of LANG_GENRES) if(rx.test(gs)) return lang;
+  }
   const raw = ((t.name || '') + ' ' + t.artists.map(a => a.name).join(' ')).toLowerCase();
   if(NONLATIN.test(raw)) return 'other';
   const flat = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -1829,10 +1924,18 @@ function adjust(t, base, disc){
     let h = 0; for(let i = 0; i < t.id.length; i++) h = (h * 31 + t.id.charCodeAt(i)) >>> 0;
     pen = 0.13 + (h % 1000) / 1000 * 0.07;
   }
+  /* Discovery shouldn't mean obscurity. When Spotify's popularity score is
+     known (catalog finds), below-average tracks pay for it — heavily at the
+     familiar end of the slider, mildly at the edges where digging is the
+     point. Library tracks have no score and pay nothing. */
+  let popAdj = 0;
+  if(t.pop !== null && t.pop !== undefined){
+    popAdj = (t.pop / 100 - 0.45) * 0.20 * (1 - disc * 0.6);
+  }
   /* Taste is always on. The slider moves you off your most-played artists,
      not off your taste — at full discovery you want new names that still
      sound like your library, not noise. */
-  return base + TASTE_W * taste(t.f) - bias * familiarity(t) * 0.45 - pen + jitterFor(t.id);
+  return base + TASTE_W * taste(t.f) + popAdj - bias * familiarity(t) * 0.45 - pen + jitterFor(t.id);
 }
 
 /* Genres are fetched on demand — only the artists in contention for THIS
@@ -2803,10 +2906,14 @@ function rankFused(concepts, pool, disc){
    minimums, but "eligible" isn't "good enough when the best is 92" — the
    72-74% stragglers are exactly the songs that never sound quite right. */
 const QUALITY_BAND = 0.14;
+let discNow = 0.5;   // set per build; the popularity floor relaxes at the edges
 function eligible(ranked, best, gFloor, pin){
   return ranked.filter(r => {
     if(r.cf[0] < HEAD_MIN || !shapeOk(r.cf)) return false;
     if(r.raw < best - QUALITY_BAND) return false;
+    /* known-popularity catalog tracks: nothing under ~25 unless you asked
+       for the edges — that range is mostly noise uploads */
+    if(r.t.pop !== null && r.t.pop !== undefined && r.t.pop < 25 && discNow < 0.8) return false;
     if(r.raw < langBar(r.t, best)) return false;
     if(pin){
       /* Hard lock, two tests: the artist must be known and dominantly this
@@ -2902,18 +3009,40 @@ async function build(){
     if(pinnedGenre) vibeLog(`🔒 Locked to ${pretty(pinnedGenre)} — only ${pretty(pinnedGenre)} songs will be used.`);
   const text = $('#vibe').value.trim();
   if(!text) return vibeLog('Type a vibe first.');
-  let parsed = parseVibe(text);
-  let swaps = [];
-  if(parsed.unknown.length){
-    vibeLog('Looking up what that means…');
-    const res = await resolveVibe(text, parsed);
-    if(res.swaps.length){
-      parsed = parseVibe(res.text);
-      swaps = res.swaps;
+
+  /* The interpreter reads the whole phrase as culture — feelings, genres,
+     defining artists. Its words feed the same scoring engine; nothing about
+     the gates changes. If it's unreachable, the plain pipeline carries on. */
+  aiRead = null;
+  vibeLog('Reading the vibe…');
+  aiRead = await interpretVibe(text);
+  let parsed, swaps = [];
+  if(aiRead){
+    const aiText = aiRead.words.join(' ');
+    parsed = parseVibe(aiText);
+    if(parsed.unknown.length){
+      const res = await resolveVibe(aiText, parsed);
+      if(res.swaps.length) parsed = parseVibe(res.text);
+    }
+    if(parsed.concepts.length){
+      swaps = [[text, aiRead.words.join(', ') + (aiRead.genres.length ? ' · ' + aiRead.genres.join(', ') : '')]];
+    }else{
+      aiRead = null;   // interpreter gave us nothing scorable — fall back entirely
+    }
+  }
+  if(!aiRead){
+    parsed = parseVibe(text);
+    if(parsed.unknown.length){
+      vibeLog('Looking up what that means…');
+      const res = await resolveVibe(text, parsed);
+      if(res.swaps.length){
+        parsed = parseVibe(res.text);
+        swaps = res.swaps;
+      }
     }
   }
   const { concepts, unknown, matched } = parsed;
-  matched.push(...swaps.map(([a,b]) => ({ word:a, key:b, how:'meaning' })));
+  matched.push(...swaps.map(([a,b]) => ({ word:a, key:b, how: aiRead ? 'ai' : 'meaning' })));
   if(!concepts.length){
     $('#readPanel').classList.remove('hidden'); $('#setPanel').classList.add('hidden');
     renderChips(matched, unknown);
@@ -2926,6 +3055,7 @@ async function build(){
 
   const n = parseInt($('#lenSlider').value, 10);
   const disc = parseInt($('#discSlider').value, 10) / 100;
+  discNow = disc;
   jitterAmp = 0.015 + disc * 0.05;   // slider right = deeper per-build shuffle
   $('#buildBtn').disabled = true;
 
@@ -3101,7 +3231,7 @@ function renderReading(concepts, matched, unknown){
 function renderChips(matched, unknown){
   const seen = new Set();
   const read = matched.filter(m => { if(seen.has(m.key)) return false; seen.add(m.key); return true; })
-    .map(m => `<span class="chip${m.how==='meaning' ? ' looked' : ''}">${esc(m.word)}${m.how!=='exact' ? ' → ' + esc(m.key) : ''}${m.how==='meaning' ? ' <i>(looked up)</i>' : ''}</span>`).join('');
+    .map(m => `<span class="chip${m.how==='meaning' ? ' looked' : ''}${m.how==='ai' ? ' aichip' : ''}">${esc(m.word)}${m.how!=='exact' ? ' → ' + esc(m.key) : ''}${m.how==='meaning' ? ' <i>(looked up)</i>' : ''}${m.how==='ai' ? ' <i>(interpreted)</i>' : ''}</span>`).join('');
   const miss = unknown.length
     ? `<span class="chip miss">not in the lexicon: ${unknown.map(esc).join(', ')}</span>` : '';
   $('#chips').innerHTML = read + miss;
