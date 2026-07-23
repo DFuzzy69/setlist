@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 60</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 61</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -1894,6 +1894,11 @@ const DE_SHAPE = /\b(luft|liebe|nacht|herz|welt|mein|dein|kein|alles|wieder|ohne
    what's achievable varies by vibe — "rage" tops out near 0.87, "hurricane on
    a beach" near 0.73, and a fixed cutoff would ban whole vibes outright. */
 const LANG_BAR = { en: 0.775, es: 0.85, other: 0.90 };
+/* Relative bars alone fail on dense pools: when the best match is 93%, the
+   Spanish bar sinks to ~79 and Despacito walks in at 82. These are the
+   absolute floors from the original spec — a song in another language earns
+   its slot outright or not at all. */
+const LANG_ABS = { en: 0.75, es: 0.85, other: 0.90 };
 
 /* An artist's genres name their language scene outright — "k-pop" says more
    than any spelling heuristic. Checked first; the name heuristic is the
@@ -1917,7 +1922,10 @@ function langOf(t){
   if(ACCENT.test(raw)) return 'other';      // accented but unplaceable — not English
   return 'en';
 }
-function langBar(t, best){ return best * (LANG_BAR[langOf(t)] || LANG_BAR.other); }
+function langBar(t, best){
+  const l = langOf(t);
+  return Math.max(best * (LANG_BAR[l] || LANG_BAR.other), LANG_ABS[l] || LANG_ABS.other);
+}
 
 /* ═══════════════════════════════════════════════════════════════════
    ═══════════════════════════════════════════════════════════════════
@@ -2871,7 +2879,32 @@ const BAKED_GENRES = {
 'zara larsson':'pop',
 'zedd':'edm',
 'ziggy marley':'reggae',
-'zomboy':'dubstep'
+'zomboy':'dubstep',
+'nsync':'pop',
+'*nsync':'pop',
+'backstreet boys':'pop',
+'spice girls':'pop',
+'a-ha':'pop',
+'wild cherry':'funk',
+'redbone':'rock',
+'santana':'rock',
+'debarge':'r&b',
+'go west':'pop rock',
+'gym class heroes':'pop rap',
+'hot chelle rae':'pop rock',
+'big time rush':'pop',
+'jesse mccartney':'pop',
+'sean kingston':'pop rap',
+'jason derulo':'pop',
+'redfoo':'pop',
+'lmfao':'pop rap',
+'icona pop':'pop',
+'marina':'pop',
+'charli xcx':'pop',
+'100 gecs':'edm',
+'jonas brothers':'pop',
+'anne-marie':'pop',
+'sia':'pop'
 };
 function normName(name){
   return (name || '')
@@ -2922,6 +2955,7 @@ for(const fam in GENRE_FAMILY) for(const w of GENRE_FAMILY[fam]) FAMILY_OF[w] = 
 /* extra sub-genre → family mappings the dropdown exposes but the family
    lists don't name explicitly */
 Object.assign(FAMILY_OF, {
+  hyperpop:'pop', bubblegum:'pop', 'teen pop':'pop', 'dance pop':'pop', 'electropop':'pop',
   trap:'rap', drill:'rap', grime:'rap', 'boom bap':'rap',
   screamo:'metal', deathcore:'metal', doom:'metal', thrash:'metal',
   'black metal':'metal', 'death metal':'metal', djent:'metal',
@@ -2957,19 +2991,30 @@ function tagFamilies(tag){
    DOMINANT family across all their tags — not merely present. This is what
    stops a country or pop artist with one "country rap" crossover tag from
    passing a rap lock. */
-function inGenre(t, key){
+function famScores(t){
   const gs = t.artists.flatMap(a => genresOf(a)).map(g => g.toLowerCase());
-  if(!gs.length) return null;               // unknown — caller decides
+  if(!gs.length) return null;
   const score = {};
   for(const g of gs){
     const fams = tagFamilies(g);
     for(const f in fams) score[f] = (score[f] || 0) + fams[f];
   }
-  if(!score[key]) return false;             // pinned genre not present at all
+  return score;
+}
+/* key may be a single family or an array of families (the interpreter's
+   genre set acts as a lock across all of them). */
+function inGenre(t, key){
+  const keys = Array.isArray(key) ? key : [key];
+  const score = famScores(t);
+  if(score === null) return null;           // unknown — caller decides
+  if(!keys.some(k => score[k])) return false;
   const top = Math.max(...Object.values(score));
-  /* Ties pass — an artist tagged "pop rap" is rap enough. Individual songs
-     that don't SOUND like the genre are caught by soundsLike() below, which is
-     how T-Pain stays a rap artist while his country cover stays out. */
+  return keys.some(k => (score[k] || 0) >= top);
+}
+function inGenre_single_(t, key){
+  const score = famScores(t) || {};
+  if(!score[key]) return false;
+  const top = Math.max(...Object.values(score));
   return score[key] >= top;
 }
 
@@ -2985,13 +3030,14 @@ for(const key in GENRE_VEC){
 }
 const SONIC_MARGIN = 0.10;
 function soundsLike(fam, f){
-  if(!f || f.est || !FAM_KEYS[fam]) return true;
+  const fams = Array.isArray(fam) ? fam : [fam];
+  if(!f || f.est || !fams.some(x => FAM_KEYS[x])) return true;
   let pinBest = 0, allBest = 0;
   for(const g in FAM_KEYS){
     for(const k of FAM_KEYS[g]){
       const s = fit(GENRE_VEC[k], f);
       if(s > allBest) allBest = s;
-      if(g === fam && s > pinBest) pinBest = s;
+      if(fams.includes(g) && s > pinBest) pinBest = s;
     }
   }
   return pinBest >= allBest - SONIC_MARGIN;
@@ -3242,8 +3288,12 @@ async function build(){
     let best = Math.max(0.0001, ...rMine.map(r => r.raw), ...rFresh.map(r => r.raw));
     {
       const gF0 = genreFloor(concepts[0].vec);
-      const have = eligible(rMine, best, gF0, pinnedGenre).length +
-                   eligible(rFresh, best, gF0, pinnedGenre).length;
+      const pre = pinnedGenre
+        || (aiRead && aiRead.genres && aiRead.genres.length
+              ? [...new Set(aiRead.genres.map(pinFamily).filter(Boolean))]
+              : null);
+      const have = eligible(rMine, best, gF0, pre).length +
+                   eligible(rFresh, best, gF0, pre).length;
       if(have < n){
         await ensureGenres([...rMine.slice(0, n * 6), ...rFresh.slice(0, n * 6)].map(r => r.t), 220);
         if(rMine.length)  rMine  = rankFused(concepts, src.mine, disc);
@@ -3253,8 +3303,14 @@ async function build(){
     }
 
     const gFloor = genreFloor(concepts[0].vec);
-    const eMine  = eligible(rMine, best, gFloor, pinnedGenre);
-    const eFresh = eligible(rFresh, best, gFloor, pinnedGenre);
+    /* dropdown lock wins; otherwise the interpreter's genres lock the build —
+       "pop, k-pop" means funk and yacht rock don't ride in on a bright tempo */
+    const effPin = pinnedGenre
+      || (aiRead && aiRead.genres && aiRead.genres.length
+            ? [...new Set(aiRead.genres.map(pinFamily).filter(Boolean))]
+            : null);
+    const eMine  = eligible(rMine, best, gFloor, effPin);
+    const eFresh = eligible(rFresh, best, gFloor, effPin);
 
     const mineShare  = src.fresh.length ? (src.mine.length ? 1 - disc : 0) : 1;
     const freshShare = src.mine.length  ? (src.fresh.length ? disc : 0)    : 1;
@@ -3287,7 +3343,7 @@ async function build(){
       const exclude = new Set([...library.map(t => t.id), ...picked.map(t => t.id)]);
       const hPool = await featuresFor(Object.values(heard || {}).filter(t => !exclude.has(t.id)));
       await ensureGenres(hPool, 80);
-      picked = topUp(picked, eligible(rankFused(concepts, hPool, disc), best, gFloor, pinnedGenre), n, 'heardTag');
+      picked = topUp(picked, eligible(rankFused(concepts, hPool, disc), best, gFloor, effPin), n, 'heardTag');
 
       if(picked.length < n){
         vibeLog(`Still ${n - picked.length} short — more from these artists…`);
@@ -3297,13 +3353,13 @@ async function build(){
           if(a.id && !seenA.has(a.id)){ seenA.add(a.id); fitArtists.push(a); }
         }
         const aPool = await featuresFor(await moreFrom(fitArtists.slice(0, 12), exclude));
-        picked = topUp(picked, eligible(rankFused(concepts, aPool, disc), best, gFloor, pinnedGenre), n, 'neu', 3);
+        picked = topUp(picked, eligible(rankFused(concepts, aPool, disc), best, gFloor, effPin), n, 'neu', 3);
       }
       if(picked.length < n){
         vibeLog(`Still short — finding similar songs…`);
         const fresh2 = await findNew(concepts, concepts.map(c => rankFor(c, mine, 0.5)), n - picked.length);
         await ensureGenres(fresh2, 80);
-        picked = topUp(picked, eligible(rankFused(concepts, fresh2, disc), best, gFloor, pinnedGenre), n, 'neu');
+        picked = topUp(picked, eligible(rankFused(concepts, fresh2, disc), best, gFloor, effPin), n, 'neu');
       }
     }
     current = { seq: sequence(picked), concepts, text };
