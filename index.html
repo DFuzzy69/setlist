@@ -144,6 +144,7 @@ ol.set .m{font-family:'DM Mono',monospace;font-size:10px;color:#5c6478;text-alig
 .pill{display:inline-block;font-family:'DM Mono',monospace;font-size:10px;padding:2px 7px;margin-left:6px;
   border:1px solid var(--haze);border-radius:20px;color:var(--dim)}
 .pill.newp{color:var(--seaglass);border-color:rgba(127,209,185,.35)}
+.pill.closep{color:var(--sodium);border-color:rgba(232,163,74,.35)}
 .pill.heardp{color:var(--sodium);border-color:rgba(232,163,74,.35)}
 .m .tech{display:none}
 body.showtech .m .tech{display:inline;margin-left:8px}
@@ -173,7 +174,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 67</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 68</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -3213,6 +3214,34 @@ function eligible(ranked, best, gFloor, pin){
   });
 }
 
+/* ── the fill tiers ──
+   When every strict stage is exhausted and the playlist is still short, the
+   user's call: fill with close fits rather than stop. Relaxation is ordered
+   and principled — language floors, head floor, and match quality NEVER
+   loosen. What loosens is genre certainty:
+     tier 1: unknown-genre artists whose SOUND clearly fits the lock and who
+             are mainstream enough not to be noise (pop ≥ 40, real features)
+     tier 2: known artists in neighboring genres whose sound fits (the soft
+             genre-floor veto instead of the hard lock)                     */
+function eligibleClose(ranked, best, gFloor, pin, tier){
+  return ranked.filter(r => {
+    if(r.cf[0] < HEAD_MIN || !shapeOk(r.cf)) return false;
+    if(r.raw < best - QUALITY_BAND) return false;
+    if(r.raw < langBar(r.t, best)) return false;
+    if(r.t.f && r.t.f.est) return false;                 // real readings only
+    if(tier === 1){
+      if(famScores(r.t) !== null) return false;          // strictly the unknowns
+      if(r.t.pop === null || r.t.pop === undefined || r.t.pop < 40) return false;
+      return pin ? soundsLike(pin, r.t.f) : (r.gf === null);
+    }
+    /* tier 2: known, neighboring genre, right sound */
+    if(famScores(r.t) === null) return false;
+    if(pin && inGenre(r.t, pin) === true) return false;  // those already had their shot
+    if(r.gf === null || r.gf < gFloor) return false;
+    return pin ? soundsLike(pin, r.t.f) : true;
+  });
+}
+
 /* Single-concept ranking. Only used to pick seed tracks for recommendations,
    so it applies no language or balance rules — those belong to the playlist. */
 function rankFor(concept, pool, disc){
@@ -3523,6 +3552,19 @@ async function buildInner(){
           picked = topUp(picked, eligible(rankFused(concepts, mPool, disc), best, gFloor, effPin), n, 'neu', maxPer);
         }
       }
+      /* the fill: strict supply is spent — close fits complete the ask */
+      if(picked.length < n){
+        const pool = [...rMine, ...rFresh];
+        for(const tier of [1, 2]){
+          if(picked.length >= n) break;
+          const close = eligibleClose(pool, best, gFloor, effPin, tier)
+            .map(r => ({ ...r, t: { ...r.t, close: true } }));
+          if(close.length){
+            vibeLog(`Filling with ${Math.min(close.length, n - picked.length)} close fits…`);
+            picked = topUp(picked, close, n, 'neu', maxPer);
+          }
+        }
+      }
     }
     current = { seq: sequence(picked), concepts, text };
 
@@ -3545,7 +3587,9 @@ async function buildInner(){
       (heardN ? `, ${heardN} you've heard` : '') + (isNew ? `, ${isNew} new to you` : '');
     msg += '.';
     if(current.seq.length < n){
-      msg += ` That's every song that truly fits.`;
+      const nClose = current.seq.filter(t => t.close).length;
+      if(nClose) msg += ` ${current.seq.length - nClose} strict matches + ${nClose} close fits.`;
+      else msg += ` That's every song that truly fits.`;
       const why = [];
       if(lockRej) why.push(`${lockRej} wrong genre`);
       if(langRej) why.push(`${langRej} language`);
@@ -3627,7 +3671,8 @@ function renderSet(seq, concepts){
       tech = concepts.map((c,i) => `<span style="color:${HUES[i%HUES.length]}">${esc(c.label.split(' ')[0])} ${Math.round(t._cf[i]*100)}</span>`).join(' ') + ' · ';
     }
     const badges = (t.heardTag ? '<span class="pill heardp">heard</span>' : '')
-                 + (t.neu ? '<span class="pill newp">new</span>' : '');
+                 + (t.neu ? '<span class="pill newp">new</span>' : '')
+                 + (t.close ? '<span class="pill closep">close</span>' : '');
     return `<li>
       <div><div class="t">${esc(t.name)}</div><div class="a">${esc(t.artists.map(a=>a.name).join(', '))}</div></div>
       <div class="m">${badges}${match !== null ? `<span class="pill">${match}%</span>` : ''}<span class="tech">${tech}${bpm}${t.f.est ? ' · <span class="est">estimated</span>' : ''}${t._ts !== undefined ? ' · you ' + Math.round(t._ts*100) : ''}${t._gf !== undefined && t._gf !== null ? ' · genre ' + Math.round(t._gf*100) : ''}</span></div>
