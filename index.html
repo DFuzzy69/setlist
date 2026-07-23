@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 48</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 52</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -305,7 +305,7 @@ const RECCO = 'https://api.reccobeats.com/v1';
 const AUTH  = 'https://accounts.spotify.com/authorize';
 const TOKEN = 'https://accounts.spotify.com/api/token';
 
-const K = { pho:'sl.pho2', heard:'sl.heard', topn:'sl.topn', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
+const K = { pho:'sl.pho2', heard:'sl.heard', topn:'sl.topn', dm:'sl.dm', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
 
 const $ = s => document.querySelector(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -1436,15 +1436,123 @@ function lev(a, b){
 /* Dice alone ranks short prefixes above transposed typos ("workuot" → "work"),
    edit distance alone is loose on long words. Blend them. */
 function fuzzy(w){
+  /* Fuzzy exists to catch typos and word-forms, not to reinterpret. On short
+     words a one-letter edit is a different word entirely — "spice"→"space",
+     "nice"→"ice" — so words of 6 letters or fewer must share their first
+     three letters with the match and stay within one edit. Longer words keep
+     the blended score with a raised bar. */
   if(w.length < 4) return null;
   let best = null, score = 0;
   for(const k in LEX){
     if(Math.abs(k.length - w.length) > 4) continue;
+    if(w.length <= 6){
+      if(k.slice(0, 3) !== w.slice(0, 3)) continue;
+      if(lev(w, k) > 1) continue;
+    }
     const s = 0.45 * dice(w, k) + 0.55 * (1 - lev(w, k) / Math.max(w.length, k.length));
     if(s > score){ score = s; best = k; }
   }
-  return score >= 0.58 ? best : null;
+  return score >= (best && best.length <= 6 ? 0.74 : 0.66) ? best : null;
 }
+/* ── meaning lookup ──
+   Words the lexicon doesn't know get looked up, not guessed at by spelling.
+   Datamuse (free, keyless) answers "what does this mean in related words";
+   any related word the lexicon DOES know carries the meaning. Whole phrases
+   are tried first — "sugar spice and everything nice" resolves as an idiom
+   (sweet, pleasant) rather than word-by-word. Cached forever. */
+let dmCache = load(K.dm, {});
+
+/* Wikipedia / Wiktionary summary for a phrase Datamuse can't place — idioms,
+   nursery rhymes, slang, named things. The summary text gets mined for words
+   the lexicon knows; the most frequent ones become the meaning. */
+async function wikiMeaning(term){
+  /* Wikipedia titles start uppercase; the REST endpoint is picky about it */
+  const clean = term.trim();
+  const t = encodeURIComponent((clean.charAt(0).toUpperCase() + clean.slice(1)).replace(/ /g, '_'));
+  for(const host of ['en.wikipedia.org', 'en.wiktionary.org']){
+    try{
+      const r = await fetch(`https://${host}/api/rest_v1/page/summary/${t}`);
+      if(r.ok){
+        const j = await r.json();
+        const text = ((j.extract || '') + ' ' + (j.description || '')).trim();
+        if(text) return text;
+      }
+    }catch(e){ /* try the next source */ }
+  }
+  return null;
+}
+
+/* Distill free text down to the lexicon concepts it mentions most. */
+const META_WORDS = new Set(['nursery','rhyme','song','songs','album','single','film','movie',
+  'band','television','series','character','phrase','idiom','term','word','words','refers',
+  'describes','american','british','english','video','game','book','novel','episode','record']);
+function conceptsFromText(text, exclude){
+  const skip = new Set((exclude || '').toLowerCase().split(/\W+/));
+  META_WORDS.forEach(w => skip.add(w));
+  const tally = {};
+  for(const w of text.toLowerCase().split(/[^a-z]+/)){
+    if(w.length < 3 || skip.has(w)) continue;
+    const key = LEX[w] ? w : (LEX[stem(w)] ? stem(w) : null);
+    if(key) tally[key] = (tally[key] || 0) + 1;
+  }
+  const top = Object.entries(tally).sort((a,b) => b[1] - a[1]).slice(0, 2).map(e => e[0]);
+  return top.length ? top.join(' ') : null;
+}
+
+async function meansLike(term){
+  const key = term.toLowerCase().trim();
+  if(key in dmCache) return dmCache[key];
+  let out = null, offline = false;
+  try{
+    const r = await fetch('https://api.datamuse.com/words?ml=' + encodeURIComponent(key) + '&max=40');
+    if(r.ok){
+      const rows = await r.json();
+      for(const row of rows){
+        const hit = LEX[row.word] || LEX[stem(row.word)];
+        if(hit){ out = LEX[row.word] ? row.word : stem(row.word); break; }
+      }
+    }
+  }catch(e){ offline = true; }
+  /* phrases Datamuse can't place go to the encyclopedia */
+  if(!out && key.includes(' ')){
+    const ext = await wikiMeaning(key);
+    if(ext) out = conceptsFromText(ext, key);
+    else if(!offline){
+      /* last try: the phrase minus filler words, as a Wikipedia title */
+      const short = key.replace(/\b(and|the|a|an|of|my|in|on|at)\b/g, ' ').trim().replace(/\s+/g, ' ');
+      if(short && short !== key){
+        const ext2 = await wikiMeaning(short);
+        if(ext2) out = conceptsFromText(ext2, key);
+      }
+    }
+  }
+  if(offline && !out) return null;   // don't cache network failures as misses
+  dmCache[key] = out;
+  save(K.dm, dmCache);
+  return out;
+}
+
+/* Resolve a vibe's unknowns. Returns { text, swaps } — a rewritten vibe where
+   every resolvable unknown is replaced by the lexicon word that carries its
+   meaning, plus the list of substitutions for honest display. */
+async function resolveVibe(text, parsed){
+  const swaps = [];
+  /* nothing matched at all? try the whole phrase as an idiom first */
+  if(!parsed.concepts.length){
+    const whole = await meansLike(text);
+    if(whole) return { text: whole, swaps: [[text, whole]] };
+  }
+  let out = text;
+  for(const w of parsed.unknown){
+    const got = await meansLike(w);
+    if(got){
+      out = out.replace(new RegExp('\\b' + w + '\\b', 'i'), got);
+      swaps.push([w, got]);
+    }
+  }
+  return { text: out, swaps };
+}
+
 function lookup(w){
   if(LEX[w]) return { key:w, how:'exact' };
   const st = stem(w);
@@ -1702,6 +1810,18 @@ function doesAll(cf){
   return mx > 0 && mn / mx >= BALANCE;
 }
 
+/* Each build gets a fresh shuffle seed; the slider sets how hard it shakes.
+   Near "the usual" the order is almost stable; near "the edges" eligible
+   tracks trade places freely — so rebuilding the same vibe gives a genuinely
+   different (but equally valid) playlist. Only the order moves; the gates
+   never loosen. */
+let buildNonce = 1, jitterAmp = 0.03;
+function jitterFor(id){
+  let h = buildNonce;
+  for(let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return ((h % 1000) / 1000 - 0.5) * 2 * jitterAmp;
+}
+
 function adjust(t, base, disc){
   const bias = (disc - 0.5) * 2;
   let pen = 0;
@@ -1712,7 +1832,7 @@ function adjust(t, base, disc){
   /* Taste is always on. The slider moves you off your most-played artists,
      not off your taste — at full discovery you want new names that still
      sound like your library, not noise. */
-  return base + TASTE_W * taste(t.f) - bias * familiarity(t) * 0.45 - pen;
+  return base + TASTE_W * taste(t.f) - bias * familiarity(t) * 0.45 - pen + jitterFor(t.id);
 }
 
 /* Genres are fetched on demand — only the artists in contention for THIS
@@ -1726,14 +1846,14 @@ let pinnedGenre = null;   // genre locked from the dropdown, or null for free-te
 /* MusicBrainz backup: open, keyless, and rate-limited independently of
    Spotify — so Spotify choking can no longer switch the genre veto off.
    Polite pace: ~1 request per second, results cached forever. */
-async function mbGenres(name){
+async function mbGenres(name, deep = true){
   const q = encodeURIComponent('artist:"' + name.replace(/"/g, '') + '"');
   const r = await fetch(`https://musicbrainz.org/ws/2/artist/?query=${q}&limit=1&fmt=json`);
   if(!r.ok) throw new Error('mb ' + r.status);
   const a = (await r.json()).artists?.[0];
   if(!a || a.score < 85) return [];
   let tags = (a.tags || []).map(t => t.name);
-  if(!tags.length && a.id){
+  if(!tags.length && a.id && deep){
     await sleep(1100);
     const r2 = await fetch(`https://musicbrainz.org/ws/2/artist/${a.id}?inc=genres+tags&fmt=json`);
     if(r2.ok){
@@ -1777,36 +1897,60 @@ async function ensureGenres(tracks, cap = 220){
     }
     if(need.length >= cap) break;
   }
-  let spotifyOk = true;
-  for(let i = 0; i < need.length; i++){
-    if(abort) break;
-    const a = need[i];
-    if(spotifyOk){
+  if(!need.length) return;
+
+  /* Two workers, one queue: Spotify eats from the front while MusicBrainz eats
+     from the back. Both sources run at their own pace simultaneously, so the
+     wall-clock cost is roughly halved — and a Spotify rate limit just means
+     MusicBrainz finishes the queue alone. */
+  let cursor = 0, done = 0, spotifyOk = true;
+  const t0 = Date.now();
+  const claim = () => cursor < need.length ? need[cursor++] : null;
+  const tick = () => {
+    done++;
+    if(done % 4 === 0 || done === need.length){
+      const rate = (Date.now() - t0) / done;
+      const left = Math.round((need.length - done) * rate / 1000);
+      glog(`Checking artists… ${done} of ${need.length}${left > 3 ? ` (~${left}s left)` : ''}`);
+    }
+    if(done % 40 === 0) save(K.gen, genres);
+  };
+
+  const spWorker = (async () => {
+    while(spotifyOk && !abort){
+      const a = claim(); if(!a) return;
       try{
         const r = await sp('/artists/' + a.id, { fastFail: true });
         genres[a.id] = r.genres || [];
-        genrePace = Math.max(420, genrePace * 0.97);
-        if(i % 5 === 0) glog(`Checking artists… ${i + 1} of ${need.length}`);
-        await sleep(genrePace);
-        continue;
+        genrePace = Math.max(300, genrePace * 0.97);
       }catch(e){
         if(/rate-limiting/.test(e.message)){
           spotifyOk = false;
           genrePace = Math.min(4000, genrePace * 1.8);
-          glog('Spotify busy — switching to the backup source…');
-        }else{
-          genres[a.id] = [];
-          continue;
+          need.push(a);                       // hand it to the other worker
+          glog('Spotify busy — backup source continuing alone…');
+          return;
         }
+        genres[a.id] = [];
       }
+      tick();
+      await sleep(genrePace);
     }
-    /* backup: MusicBrainz by artist name */
-    try{ genres[a.id] = a.name ? await mbGenres(a.name) : []; }
-    catch(e){ genres[a.id] = []; }
-    if(i % 5 === 0) glog(`Checking artists (backup source)… ${i + 1} of ${need.length}`);
-    if(i % 40 === 39) save(K.gen, genres);
-    await sleep(1100);
-  }
+  })();
+
+  const mbWorker = (async () => {
+    while(!abort){
+      const a = claim(); if(!a) return;
+      /* the detail follow-up doubles MB cost; only worth it when the queue is
+         nearly drained and every answer matters */
+      try{ genres[a.id] = a.name ? await mbGenres(a.name, need.length - done < 40) : []; }
+      catch(e){ genres[a.id] = []; }
+      tick();
+      await sleep(1100);
+    }
+  })();
+
+  await Promise.all([spWorker, mbWorker]);
   save(K.gen, genres);
 }
 
@@ -2655,9 +2799,14 @@ function rankFused(concepts, pool, disc){
    meant every artist the lookup hadn't reached yet got in on audio features
    alone — and features can't tell a pop ballad from a storm. Unknown genre
    is now a rejection: a shorter playlist beats a padded one. */
+/* Nothing far below the best available match gets in. The floors are absolute
+   minimums, but "eligible" isn't "good enough when the best is 92" — the
+   72-74% stragglers are exactly the songs that never sound quite right. */
+const QUALITY_BAND = 0.14;
 function eligible(ranked, best, gFloor, pin){
   return ranked.filter(r => {
     if(r.cf[0] < HEAD_MIN || !shapeOk(r.cf)) return false;
+    if(r.raw < best - QUALITY_BAND) return false;
     if(r.raw < langBar(r.t, best)) return false;
     if(pin){
       /* Hard lock, two tests: the artist must be known and dominantly this
@@ -2749,15 +2898,27 @@ function sequence(list){
 let current = null, source = 'lib';
 
 async function build(){
+    buildNonce = (Math.random() * 2147483647) | 0;
     if(pinnedGenre) vibeLog(`🔒 Locked to ${pretty(pinnedGenre)} — only ${pretty(pinnedGenre)} songs will be used.`);
   const text = $('#vibe').value.trim();
   if(!text) return vibeLog('Type a vibe first.');
-  const { concepts, unknown, matched } = parseVibe(text);
+  let parsed = parseVibe(text);
+  let swaps = [];
+  if(parsed.unknown.length){
+    vibeLog('Looking up what that means…');
+    const res = await resolveVibe(text, parsed);
+    if(res.swaps.length){
+      parsed = parseVibe(res.text);
+      swaps = res.swaps;
+    }
+  }
+  const { concepts, unknown, matched } = parsed;
+  matched.push(...swaps.map(([a,b]) => ({ word:a, key:b, how:'meaning' })));
   if(!concepts.length){
     $('#readPanel').classList.remove('hidden'); $('#setPanel').classList.add('hidden');
-    renderChips([], unknown);
+    renderChips(matched, unknown);
     $('#mixWrap').innerHTML = ''; $('#readout').innerHTML = '';
-    return vibeLog('None of those words are in the lexicon yet. Try a place, a weather, a time of day, or a feeling.');
+    return vibeLog("Couldn't find a meaning for that, even with a lookup. Try a place, a weather, a time of day, or a feeling.");
   }
   recount();
   const mine = library.map(t => ({ ...t, f: features[t.id] })).filter(t => t.f);
@@ -2765,6 +2926,7 @@ async function build(){
 
   const n = parseInt($('#lenSlider').value, 10);
   const disc = parseInt($('#discSlider').value, 10) / 100;
+  jitterAmp = 0.015 + disc * 0.05;   // slider right = deeper per-build shuffle
   $('#buildBtn').disabled = true;
 
   try{
@@ -2789,11 +2951,23 @@ async function build(){
 
     let rMine  = src.mine.length  ? rankFused(concepts, src.mine, disc)  : [];
     let rFresh = src.fresh.length ? rankFused(concepts, src.fresh, disc) : [];
-    /* only the contenders need genres — then rank again with them known */
-    await ensureGenres([...rMine.slice(0, n * 6), ...rFresh.slice(0, n * 6)].map(r => r.t));
+    /* Genres are checked lazily: the top slice first, and a wider slice only
+       if the gates leave the playlist short. Most builds never need pass 2. */
+    await ensureGenres([...rMine.slice(0, n * 2), ...rFresh.slice(0, n * 2)].map(r => r.t), 110);
     if(rMine.length)  rMine  = rankFused(concepts, src.mine, disc);
     if(rFresh.length) rFresh = rankFused(concepts, src.fresh, disc);
-    const best = Math.max(0.0001, ...rMine.map(r => r.raw), ...rFresh.map(r => r.raw));
+    let best = Math.max(0.0001, ...rMine.map(r => r.raw), ...rFresh.map(r => r.raw));
+    {
+      const gF0 = genreFloor(concepts[0].vec);
+      const have = eligible(rMine, best, gF0, pinnedGenre).length +
+                   eligible(rFresh, best, gF0, pinnedGenre).length;
+      if(have < n){
+        await ensureGenres([...rMine.slice(0, n * 6), ...rFresh.slice(0, n * 6)].map(r => r.t), 220);
+        if(rMine.length)  rMine  = rankFused(concepts, src.mine, disc);
+        if(rFresh.length) rFresh = rankFused(concepts, src.fresh, disc);
+        best = Math.max(0.0001, ...rMine.map(r => r.raw), ...rFresh.map(r => r.raw));
+      }
+    }
 
     const gFloor = genreFloor(concepts[0].vec);
     const eMine  = eligible(rMine, best, gFloor, pinnedGenre);
@@ -2927,7 +3101,7 @@ function renderReading(concepts, matched, unknown){
 function renderChips(matched, unknown){
   const seen = new Set();
   const read = matched.filter(m => { if(seen.has(m.key)) return false; seen.add(m.key); return true; })
-    .map(m => `<span class="chip">${esc(m.word)}${m.how!=='exact' ? ' → ' + esc(m.key) : ''}</span>`).join('');
+    .map(m => `<span class="chip${m.how==='meaning' ? ' looked' : ''}">${esc(m.word)}${m.how!=='exact' ? ' → ' + esc(m.key) : ''}${m.how==='meaning' ? ' <i>(looked up)</i>' : ''}</span>`).join('');
   const miss = unknown.length
     ? `<span class="chip miss">not in the lexicon: ${unknown.map(esc).join(', ')}</span>` : '';
   $('#chips').innerHTML = read + miss;
