@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 58</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 59</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -992,23 +992,26 @@ async function interpretVibe(text){
   /* form 0: Groq, if the user added a free key — much stronger and reliable */
   const gk = load(K.groq, '');
   if(gk){
-    try{
-      const r = await grab(signal => fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + gk },
-        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: body.messages,
-                               response_format: { type: 'json_object' } }),
-        signal
-      }));
-      if(r.ok){
-        const j = await r.json();
-        raw = (j.choices?.[0]?.message?.content || '');
-      }
-    }catch(e){}
+    for(const model of ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant']){
+      try{
+        const r = await grab(signal => fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + gk },
+          body: JSON.stringify({ model, messages: body.messages,
+                                 response_format: { type: 'json_object' } }),
+          signal
+        }));
+        if(r.ok){
+          const j = await r.json();
+          raw = (j.choices?.[0]?.message?.content || '');
+          if(raw) break;
+        }
+      }catch(e){}
+    }
   }
   /* form 1: the chat endpoint */
   try{
-    const r = await grab(signal => fetch('https://text.pollinations.ai/openai', {
+    const r = await grab(signal => fetch('https://text.pollinations.ai/openai?referrer=' + encodeURIComponent(location.hostname), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal
     }));
@@ -1022,7 +1025,7 @@ async function interpretVibe(text){
     try{
       const q = encodeURIComponent(
         sys + ' Vibe: "' + text + '"');
-      const r2 = await grab(signal => fetch('https://text.pollinations.ai/' + q + '?model=openai', { signal }));
+      const r2 = await grab(signal => fetch('https://text.pollinations.ai/' + q + '?model=openai&referrer=' + encodeURIComponent(location.hostname), { signal }));
       if(r2.ok) raw = await r2.text();
     }catch(e){}
   }
@@ -3127,7 +3130,9 @@ async function build(){
   aiRead = await interpretVibe(text);
   $('#aiStatus').innerHTML = aiRead
     ? `🧠 Interpreted: <b>${esc(aiRead.words.join(', '))}</b>${aiRead.genres.length ? ' · ' + esc(aiRead.genres.join(', ')) : ''}${aiRead.tracks && aiRead.tracks.length ? ' · ' + aiRead.tracks.length + ' songs suggested' : ''}`
-    : '⚠️ Interpreter couldn\'t be reached — built-in reading used. Rebuild to retry.';
+    : (load(K.groq, '')
+        ? '⚠️ Interpreter unreachable even with your key — check the key, then rebuild to retry.'
+        : '⚠️ The free interpreter has gone key-only. Add a free Groq key under Account & data (console.groq.com, 2 min) for reliable interpretation.');
   vibeLog(aiRead ? 'Interpreted.' : 'Interpreter unreachable — using the built-in reading.');
   let parsed, swaps = [];
   if(aiRead && aiRead.vec){
