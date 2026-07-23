@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 55</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 56</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -305,7 +305,7 @@ const RECCO = 'https://api.reccobeats.com/v1';
 const AUTH  = 'https://accounts.spotify.com/authorize';
 const TOKEN = 'https://accounts.spotify.com/api/token';
 
-const K = { pho:'sl.pho2', heard:'sl.heard', topn:'sl.topn', dm:'sl.dm', ai:'sl.ai', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
+const K = { pho:'sl.pho2', heard:'sl.heard', topn:'sl.topn', dm:'sl.dm', ai2:'sl.ai2', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
 
 const $ = s => document.querySelector(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -952,24 +952,28 @@ async function catalogSearch(concept, want){
    hand-built lexicon can never know. Falls back silently to the plain
    pipeline when unreachable; every answer is cached.
    ═══════════════════════════════════════════════════════════════════ */
-let aiCache = load(K.ai, {});
+let aiCache = load(K.ai2, {});
+const AI_PROMPT =
+  'You translate playlist vibe phrases into JSON for a music engine. ' +
+  'Reply with ONLY a JSON object, no prose, no markdown fences: ' +
+  '{"words": 2-4 plain English mood words, ' +
+  '"sound": {"bpm": typical tempo as a number, "energy": 0-100, "happy": 0-100 how bright/positive it sounds, ' +
+  '"groove": 0-100 how danceable, "acoustic": 0-100 how unplugged, "wordless": 0-100 how instrumental}, ' +
+  '"genres": 1-3 strictly from this list: [GENRELIST], ' +
+  '"artists": 4-6 well-known artists that define the vibe culturally, ' +
+  '"language": "en"|"es"|"any"}. ' +
+  'Interpret cultural references: "Bubblegum Princess" means sugary teen pop / hyperpop — bright, fast, danceable, sung.';
 let aiRead = null;   // this build's interpretation, if any
 
 async function interpretVibe(text){
   const key = text.toLowerCase().trim();
   if(key in aiCache) return aiCache[key];
   const genreList = Object.keys(GENRE_VEC).join(', ');
+  const sys = AI_PROMPT.replace('GENRELIST', genreList);
   const body = {
     model: 'openai',
     messages: [
-      { role: 'system', content:
-        'You translate playlist vibe phrases into JSON for a music engine. ' +
-        'Reply with ONLY a JSON object, no prose, no markdown fences: ' +
-        '{"words": 2-4 plain English feeling/place/weather words that capture the sonic mood, ' +
-        '"genres": 1-3 genre names strictly from this list: [' + genreList + '], ' +
-        '"artists": 4-6 well-known artists that define this vibe culturally, ' +
-        '"language": "en"|"es"|"any" — main language of the scene}. ' +
-        'Interpret cultural references: e.g. "Bubblegum Princess" means sugary teen pop / hyperpop.' },
+      { role: 'system', content: sys },
       { role: 'user', content: text }
     ]
   };
@@ -994,9 +998,7 @@ async function interpretVibe(text){
   if(!raw){
     try{
       const q = encodeURIComponent(
-        'Reply with ONLY a JSON object, no prose: {"words": 2-4 plain English feeling words for this playlist vibe, ' +
-        '"genres": 1-3 strictly from [' + genreList + '], "artists": 4-6 well-known defining artists, "language":"en"|"es"|"any"}. ' +
-        'Vibe: "' + text + '"');
+        sys + ' Vibe: "' + text + '"');
       const r2 = await grab(signal => fetch('https://text.pollinations.ai/' + q + '?model=openai', { signal }));
       if(r2.ok) raw = await r2.text();
     }catch(e){}
@@ -1011,6 +1013,19 @@ async function interpretVibe(text){
     out.words   = out.words.slice(0, 4).map(w => String(w).toLowerCase());
     out.genres  = (out.genres || []).map(g => String(g).toLowerCase()).filter(g => GENRE_VEC[g]).slice(0, 3);
     out.artists = (out.artists || []).map(a => String(a)).slice(0, 6);
+    /* the model's own sound target — this is what gets scored, no lexicon */
+    /* Concept vectors carry ONLY defined dimensions — fit() iterates every key,
+       so a stray bpm or null would be scored as a dimension and zero everything. */
+    const sd = out.sound;
+    out.vec = null;
+    if(sd && isFinite(sd.bpm)){
+      const pc = x => isFinite(x) ? Math.min(1, Math.max(0, x / 100)) : null;
+      const v = { t: Math.min(1, Math.max(0, (sd.bpm - 60) / 120)) };
+      const put = (k, x) => { const n = pc(x); if(n !== null) v[k] = n; };
+      put('e', sd.energy); put('v', sd.happy); put('d', sd.groove);
+      put('a', sd.acoustic); put('i', sd.wordless);
+      if('e' in v && 'v' in v && 'd' in v) out.vec = v;
+    }
     aiCache[key] = out; save(K.ai, aiCache);
     return out;
   }catch(e){ return null; }   // unparseable — the plain pipeline takes over
@@ -3039,7 +3054,13 @@ async function build(){
   vibeLog(aiRead ? 'Interpreted: ' + aiRead.words.join(', ') + (aiRead.genres.length ? ' · ' + aiRead.genres.join(', ') : '')
                  : 'Interpreter unreachable — using the built-in reading.');
   let parsed, swaps = [];
-  if(aiRead){
+  if(aiRead && aiRead.vec){
+    /* the model described the sound itself — that IS the concept. No lexicon
+       squeeze: "sweet, golden, sparkly" no longer collapses to whatever one
+       word the lexicon happens to know. */
+    parsed = { concepts: [{ label: text, vec: aiRead.vec, weight: 1, terms: [] }], unknown: [], matched: [] };
+    swaps = [[text, aiRead.words.join(', ') + (aiRead.genres.length ? ' · ' + aiRead.genres.join(', ') : '')]];
+  }else if(aiRead){
     const aiText = aiRead.words.join(' ');
     parsed = parseVibe(aiText);
     if(parsed.unknown.length){
