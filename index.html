@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 59</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 60</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -310,7 +310,7 @@ const RECCO = 'https://api.reccobeats.com/v1';
 const AUTH  = 'https://accounts.spotify.com/authorize';
 const TOKEN = 'https://accounts.spotify.com/api/token';
 
-const K = { pho:'sl.pho2', heard:'sl.heard', topn:'sl.topn', dm:'sl.dm', ai2:'sl.ai2', groq:'sl.groq', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
+const K = { pho:'sl.pho2', heard:'sl.heard', topn:'sl.topn', dm:'sl.dm', ai2:'sl.ai2', groq:'sl.groq', gmodel:'sl.gmodel', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
 
 const $ = s => document.querySelector(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -958,6 +958,7 @@ async function catalogSearch(concept, want){
    pipeline when unreachable; every answer is cached.
    ═══════════════════════════════════════════════════════════════════ */
 let aiCache = load(K.ai2, {});
+let aiErr = '';
 const AI_PROMPT =
   'You translate playlist vibe phrases into JSON for a music engine. ' +
   'Reply with ONLY a JSON object, no prose, no markdown fences: ' +
@@ -972,6 +973,7 @@ const AI_PROMPT =
 let aiRead = null;   // this build's interpretation, if any
 
 async function interpretVibe(text){
+  aiErr = '';
   const key = text.toLowerCase().trim();
   if(key in aiCache) return aiCache[key];
   const genreList = Object.keys(GENRE_VEC).join(', ');
@@ -992,25 +994,52 @@ async function interpretVibe(text){
   /* form 0: Groq, if the user added a free key — much stronger and reliable */
   const gk = load(K.groq, '');
   if(gk){
-    for(const model of ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant']){
+    /* Never hardcode a Groq model — they deprecate fast (both my first picks
+       died June 2026). Ask the key what's live, prefer the strong ones, cache
+       the choice, and re-pick automatically if it ever 400s. */
+    let model = load(K.gmodel, null);
+    if(!model){
       try{
-        const r = await grab(signal => fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + gk },
-          body: JSON.stringify({ model, messages: body.messages,
-                                 response_format: { type: 'json_object' } }),
-          signal
+        const r = await grab(signal => fetch('https://api.groq.com/openai/v1/models', {
+          headers: { 'Authorization': 'Bearer ' + gk }, signal
         }));
         if(r.ok){
-          const j = await r.json();
-          raw = (j.choices?.[0]?.message?.content || '');
-          if(raw) break;
+          const ids = ((await r.json()).data || []).map(m => m.id);
+          const prefs = [/gpt-oss-120b/, /qwen.*3/, /gpt-oss-20b/, /llama.*versatile/, /llama.*instant/, /kimi/, /maverick|scout/];
+          for(const rx of prefs){ const hit = ids.find(id => rx.test(id)); if(hit){ model = hit; break; } }
+          if(!model) model = ids.find(id => !/whisper|tts|guard|embed|orpheus/i.test(id)) || null;
+          if(model) save(K.gmodel, model);
+        }else{
+          aiErr = 'Groq rejected the key (' + r.status + ')';
         }
-      }catch(e){}
+      }catch(e){ aiErr = 'Groq unreachable from this browser'; }
+    }
+    if(model){
+      for(const withJson of [true, false]){
+        try{
+          const payload = { model, messages: body.messages };
+          if(withJson) payload.response_format = { type: 'json_object' };
+          const r = await grab(signal => fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + gk },
+            body: JSON.stringify(payload), signal
+          }));
+          if(r.ok){
+            const j = await r.json();
+            raw = (j.choices?.[0]?.message?.content || '');
+            if(raw) break;
+          }else{
+            const errText = await r.text();
+            if(/model/i.test(errText) && r.status === 400){ save(K.gmodel, null); aiErr = 'Groq model rotated — rebuild once'; break; }
+            if(!withJson) aiErr = 'Groq error ' + r.status;
+            if(!/response_format|json/i.test(errText)) break;   // only retry when JSON mode was the complaint
+          }
+        }catch(e){ aiErr = 'Groq unreachable from this browser'; break; }
+      }
     }
   }
   /* form 1: the chat endpoint */
-  try{
+  if(!raw) try{
     const r = await grab(signal => fetch('https://text.pollinations.ai/openai?referrer=' + encodeURIComponent(location.hostname), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal
@@ -3131,7 +3160,7 @@ async function build(){
   $('#aiStatus').innerHTML = aiRead
     ? `🧠 Interpreted: <b>${esc(aiRead.words.join(', '))}</b>${aiRead.genres.length ? ' · ' + esc(aiRead.genres.join(', ')) : ''}${aiRead.tracks && aiRead.tracks.length ? ' · ' + aiRead.tracks.length + ' songs suggested' : ''}`
     : (load(K.groq, '')
-        ? '⚠️ Interpreter unreachable even with your key — check the key, then rebuild to retry.'
+        ? '⚠️ Interpreter failed: ' + (aiErr || 'no readable reply') + '. Rebuild to retry.'
         : '⚠️ The free interpreter has gone key-only. Add a free Groq key under Account & data (console.groq.com, 2 min) for reliable interpretation.');
   vibeLog(aiRead ? 'Interpreted.' : 'Interpreter unreachable — using the built-in reading.');
   let parsed, swaps = [];
@@ -3735,7 +3764,7 @@ $('#clientId').value = clientId;
 $('#clientId').oninput = e => { clientId = e.target.value.trim(); save(K.cid, clientId); };
 $('#connect').onclick = beginAuth;
 $('#groqKey').value = load(K.groq, '') || '';
-$('#groqKey').onchange = () => { save(K.groq, $('#groqKey').value.trim()); aiCache = {}; save(K.ai2, aiCache); };
+$('#groqKey').onchange = () => { save(K.groq, $('#groqKey').value.trim()); save(K.gmodel, null); aiCache = {}; save(K.ai2, aiCache); };
 $('#forget2').onclick = () => $('#forget').onclick();
 $('#forget').onclick = () => {
   [K.tok, K.top].forEach(k => localStorage.removeItem(k));
