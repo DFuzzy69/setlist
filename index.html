@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 64</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 65</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -856,15 +856,18 @@ async function moreFrom(artists, exclude){
 /* Fill remaining slots, best-first, respecting the artist cap. */
 function topUp(picked, ranked, n, tag, maxPer = 2){
   const seen = new Set(picked.map(t => t.id));
+  const sigs = new Set(picked.map(songSig));
   const byArtist = {};
   picked.forEach(t => { const a = t.artists[0]?.id; if(a) byArtist[a] = (byArtist[a]||0) + 1; });
   for(const r of ranked){
     if(picked.length >= n) break;
     const t = r.t;
     if(seen.has(t.id)) continue;
+    const sg = songSig(t);
+    if(sigs.has(sg)) continue;
     const a = t.artists[0]?.id;
     if(a && (byArtist[a]||0) >= maxPer) continue;
-    seen.add(t.id); if(a) byArtist[a] = (byArtist[a]||0) + 1;
+    seen.add(t.id); sigs.add(sg); if(a) byArtist[a] = (byArtist[a]||0) + 1;
     picked.push({ ...t, _cf: r.cf, _ts: r.ts, _gf: r.gf, [tag]: true });
   }
   return picked;
@@ -1157,20 +1160,25 @@ async function seedArtistTracks(names, exclude){
 
 async function findNew(concepts, ranked, want){
   const have = new Set(library.map(t => t.id));
+  const haveSig = new Set(library.map(songSig));
   const found = new Map();
+  const seenSig = new Set();
+  const takeNew = t => {
+    const sg = songSig(t);
+    if(have.has(t.id) || haveSig.has(sg) || seenSig.has(sg) || found.has(t.id)) return false;
+    seenSig.add(sg); found.set(t.id, t); return true;
+  };
 
   // 0. songs the interpreter named outright, verified on Spotify
   const ex = new Set(have);
   if(aiRead && aiRead.tracks && aiRead.tracks.length){
     vibeLog(`Checking ${aiRead.tracks.length} songs the interpreter suggested…`);
-    for(const t of await aiTrackSearch(aiRead.tracks, ex))
-      if(!found.has(t.id)) found.set(t.id, t);
+    for(const t of await aiTrackSearch(aiRead.tracks, ex)) takeNew(t);
   }
   // 0b. the artists that define the vibe
   if(aiRead && aiRead.artists && aiRead.artists.length){
     vibeLog('Pulling from the artists that define this vibe…');
-    for(const t of await seedArtistTracks(aiRead.artists, ex))
-      if(!found.has(t.id)) found.set(t.id, t);
+    for(const t of await seedArtistTracks(aiRead.artists, ex)) takeNew(t);
   }
 
   for(let c = 0; c < concepts.length; c++){
@@ -1178,14 +1186,12 @@ async function findNew(concepts, ranked, want){
     const seeds = (ranked[c] || []).slice(0, 5).map(r => r.t.id);
     if(seeds.length){
       vibeLog(`Finding music like your best matches for “${concepts[c].label}”…`);
-      for(const t of await recommend(seeds, concepts[c], Math.max(40, want)))
-        if(!have.has(t.id) && !found.has(t.id)) found.set(t.id, t);
+      for(const t of await recommend(seeds, concepts[c], Math.max(40, want))) takeNew(t);
       await sleep(RB_GAP);
     }
     // 2. Spotify catalog by nearest genre — broad
     vibeLog(`Searching the Spotify catalog for “${concepts[c].label}”…`);
-    for(const t of await catalogSearch(concepts[c], want))
-      if(!have.has(t.id) && !found.has(t.id)) found.set(t.id, t);
+    for(const t of await catalogSearch(concepts[c], want)) takeNew(t);
   }
   if(!found.size) return [];
 
@@ -3138,9 +3144,22 @@ function rankFor(concept, pool, disc){
    it alternates between their own ranked lists. With quotas, each stream gets
    an exact allocation; a stream that runs dry hands its remainder to the others
    and the shortfall is reported rather than silently absorbed. */
+/* One song, many Spotify IDs: album cut, single, reissue, radio edit. ID-based
+   dedupe let "I Love It" into a playlist three times. This signature collapses
+   pressings: primary artist + title with parentheticals and " - Whatever Edit"
+   suffixes stripped. */
+function songSig(t){
+  const ttl = (t.name || '').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s*[\(\[].*?[\)\]]/g, '')        // (feat. …) (Remastered)
+    .split(' - ')[0]                              // " - Radio Edit", " - Remix"
+    .replace(/[^a-z0-9]+/g, ' ').trim();
+  return normName(t.artists?.[0]?.name || '') + '|' + ttl;
+}
+
 function interleave(ranked, weights, n, maxPerArtist = 2, quotas = null){
   const idx = ranked.map(() => 0), taken = ranked.map(() => 0);
-  const seen = new Set(), byArtist = {}, out = [];
+  const seen = new Set(), sigs = new Set(), byArtist = {}, out = [];
   const cap = quotas ? quotas.slice() : null;
   let guard = 0;
 
@@ -3166,9 +3185,11 @@ function interleave(ranked, weights, n, maxPerArtist = 2, quotas = null){
     if(!row) continue;
     const tr = row.t;
     if(seen.has(tr.id)) continue;
+    const sg = songSig(tr);
+    if(sigs.has(sg)) continue;
     const aid = tr.artists[0] ? tr.artists[0].id : tr.id;
     if((byArtist[aid]||0) >= maxPerArtist) continue;
-    seen.add(tr.id); byArtist[aid] = (byArtist[aid]||0) + 1; taken[pick]++;
+    seen.add(tr.id); sigs.add(sg); byArtist[aid] = (byArtist[aid]||0) + 1; taken[pick]++;
     out.push({ ...tr, _c: pick, _s: row.s, _cf: row.cf, _ts: row.ts, _gf: row.gf });
   }
   out.taken = taken;
