@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 56</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 57</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -961,6 +961,7 @@ const AI_PROMPT =
   '"groove": 0-100 how danceable, "acoustic": 0-100 how unplugged, "wordless": 0-100 how instrumental}, ' +
   '"genres": 1-3 strictly from this list: [GENRELIST], ' +
   '"artists": 4-6 well-known artists that define the vibe culturally, ' +
+  '"tracks": 12-18 real songs that fit, each as "Artist - Title", mixing famous and lesser-known, ' +
   '"language": "en"|"es"|"any"}. ' +
   'Interpret cultural references: "Bubblegum Princess" means sugary teen pop / hyperpop — bright, fast, danceable, sung.';
 let aiRead = null;   // this build's interpretation, if any
@@ -1013,6 +1014,7 @@ async function interpretVibe(text){
     out.words   = out.words.slice(0, 4).map(w => String(w).toLowerCase());
     out.genres  = (out.genres || []).map(g => String(g).toLowerCase()).filter(g => GENRE_VEC[g]).slice(0, 3);
     out.artists = (out.artists || []).map(a => String(a)).slice(0, 6);
+    out.tracks  = (out.tracks || []).map(t => String(t)).filter(t => /.+[-–—].+/.test(t)).slice(0, 18);
     /* the model's own sound target — this is what gets scored, no lexicon */
     /* Concept vectors carry ONLY defined dimensions — fit() iterates every key,
        so a stray bpm or null would be scored as a dimension and zero everything. */
@@ -1026,9 +1028,49 @@ async function interpretVibe(text){
       put('a', sd.acoustic); put('i', sd.wordless);
       if('e' in v && 'v' in v && 'd' in v) out.vec = v;
     }
-    aiCache[key] = out; save(K.ai, aiCache);
+    /* no usable sound numbers? the validated genres carry vectors of their
+       own — average them. Still zero lexicon in the path. */
+    if(!out.vec && out.genres.length){
+      const v = {}, n = {};
+      for(const g of out.genres){
+        const gv = GENRE_VEC[g];
+        for(const d in gv){
+          if(d === 'est' || gv[d] === null || gv[d] === undefined) continue;
+          v[d] = (v[d] || 0) + gv[d]; n[d] = (n[d] || 0) + 1;
+        }
+      }
+      for(const d in v) v[d] /= n[d];
+      if('e' in v) out.vec = v;
+    }
+    aiCache[key] = out; save(K.ai2, aiCache);
     return out;
   }catch(e){ return null; }   // unparseable — the plain pipeline takes over
+}
+
+/* The interpreter's named songs, verified against Spotify. Each "Artist - Title"
+   is searched, the artist name must actually match, and what comes back still
+   faces every gate. This is the most direct transfer of what the model knows. */
+async function aiTrackSearch(list, exclude){
+  const out = [];
+  for(const line of list){
+    const m = /^(.+?)\s*[-–—]\s*(.+)$/.exec(line);
+    if(!m) continue;
+    const artist = m[1].trim(), title = m[2].trim();
+    try{
+      const q = encodeURIComponent(`track:"${title}" artist:"${artist}"`);
+      const r = await sp(`/search?q=${q}&type=track&limit=3`, { fastFail: true });
+      for(const t of (r?.tracks?.items || [])){
+        if(!t.id || exclude.has(t.id)) continue;
+        if(!(t.artists||[]).some(x => normName(x.name) === normName(artist))) continue;
+        out.push({ id:t.id, name:t.name, pop:t.popularity ?? null,
+                   artists:t.artists.map(x => ({ id:x.id, name:x.name })) });
+        exclude.add(t.id);
+        break;
+      }
+    }catch(e){ if(/rate-limiting/.test(e.message)) return out; }
+    await sleep(110);
+  }
+  return out;
 }
 
 /* Seed-artist discovery: search each culturally-defining artist by name and
@@ -1056,10 +1098,16 @@ async function findNew(concepts, ranked, want){
   const have = new Set(library.map(t => t.id));
   const found = new Map();
 
-  // 0. the interpreter's seed artists — culture first, sound checks after
+  // 0. songs the interpreter named outright, verified on Spotify
+  const ex = new Set(have);
+  if(aiRead && aiRead.tracks && aiRead.tracks.length){
+    vibeLog(`Checking ${aiRead.tracks.length} songs the interpreter suggested…`);
+    for(const t of await aiTrackSearch(aiRead.tracks, ex))
+      if(!found.has(t.id)) found.set(t.id, t);
+  }
+  // 0b. the artists that define the vibe
   if(aiRead && aiRead.artists && aiRead.artists.length){
     vibeLog('Pulling from the artists that define this vibe…');
-    const ex = new Set(have);
     for(const t of await seedArtistTracks(aiRead.artists, ex))
       if(!found.has(t.id)) found.set(t.id, t);
   }
