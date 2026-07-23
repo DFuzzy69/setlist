@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 66</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 67</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -311,7 +311,7 @@ const RECCO = 'https://api.reccobeats.com/v1';
 const AUTH  = 'https://accounts.spotify.com/authorize';
 const TOKEN = 'https://accounts.spotify.com/api/token';
 
-const K = { pho:'sl.pho2', heard:'sl.heard', topn:'sl.topn', dm:'sl.dm', ai2:'sl.ai2', groq:'sl.groq', gmodel:'sl.gmodel', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
+const K = { pho:'sl.pho2', heard:'sl.heard', topn:'sl.topn', dm:'sl.dm', ai2:'sl.ai2', groq:'sl.groq', gmodel:'sl.gmodel', tsc:'sl.tsc', cid:'sl.cid', tok:'sl.tok', lib:'sl.lib', feat:'sl.feat', gen:'sl.gen', top:'sl.top', disc:'sl.disc', ver:'sl.pkce', st:'sl.state' };
 
 const $ = s => document.querySelector(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -1114,24 +1114,50 @@ async function interpretVibe(text){
 /* The interpreter's named songs, verified against Spotify. Each "Artist - Title"
    is searched, the artist name must actually match, and what comes back still
    faces every gate. This is the most direct transfer of what the model knows. */
+let trackCache = load(K.tsc, {});   // "artist|title" -> verified track, or false for a confirmed miss
+let rateTrimmed = false;            // set when a rate limit cut a supply stage short
+
 async function aiTrackSearch(list, exclude){
   const out = [];
-  for(const line of list){
-    const m = /^(.+?)\s*[-–—]\s*(.+)$/.exec(line);
+  let waits = 0;
+  for(let i = 0; i < list.length; i++){
+    const m = /^(.+?)\s*[-\u2013\u2014]\s*(.+)$/.exec(list[i]);
     if(!m) continue;
     const artist = m[1].trim(), title = m[2].trim();
+    const ck = normName(artist) + '|' + title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    /* verified once, cached forever — rebuilds spend zero budget re-finding these */
+    if(ck in trackCache){
+      const c = trackCache[ck];
+      if(c && !exclude.has(c.id)){ out.push(c); exclude.add(c.id); }
+      continue;
+    }
     try{
       const q = encodeURIComponent(`track:"${title}" artist:"${artist}"`);
       const r = await sp(`/search?q=${q}&type=track&limit=3`, { fastFail: true });
+      let hit = null;
       for(const t of (r?.tracks?.items || [])){
-        if(!t.id || exclude.has(t.id)) continue;
+        if(!t.id) continue;
         if(!(t.artists||[]).some(x => normName(x.name) === normName(artist))) continue;
-        out.push({ id:t.id, name:t.name, pop:t.popularity ?? null,
-                   artists:t.artists.map(x => ({ id:x.id, name:x.name })) });
-        exclude.add(t.id);
+        hit = { id:t.id, name:t.name, pop:t.popularity ?? null,
+                artists:t.artists.map(x => ({ id:x.id, name:x.name })) };
         break;
       }
-    }catch(e){ if(/rate-limiting/.test(e.message)) return out; }
+      trackCache[ck] = hit || false;
+      save(K.tsc, trackCache);
+      if(hit && !exclude.has(hit.id)){ out.push(hit); exclude.add(hit.id); }
+    }catch(e){
+      if(/rate-limiting/.test(e.message)){
+        /* these verified names ARE the payload — wait it out twice before quitting */
+        if(waits < 2){
+          waits++;
+          vibeLog(`Spotify breather — waiting 20s to keep verifying songs…`);
+          await sleep(20000);
+          i--; continue;
+        }
+        rateTrimmed = true;
+        return out;
+      }
+    }
     await sleep(110);
   }
   return out;
@@ -1187,11 +1213,15 @@ async function interpretMore(text, excludeNames, count){
 /* Seed-artist discovery: search each culturally-defining artist by name and
    collect their tracks. This is what makes discovery on-culture rather than
    merely on-sound. */
-async function seedArtistTracks(names, exclude){
+async function seedArtistTracks(names, exclude, deep = false){
   const out = [];
-  for(const name of names){
+  let waits = 0;
+  const jobs = [];
+  for(const name of names){ jobs.push([name, 0]); if(deep) jobs.push([name, 10]); }
+  for(let i = 0; i < jobs.length; i++){
+    const [name, offset] = jobs[i];
     try{
-      const r = await sp(`/search?q=${encodeURIComponent('artist:"' + name + '"')}&type=track&limit=10&offset=${Math.random()<0.5?0:10}`);
+      const r = await sp(`/search?q=${encodeURIComponent('artist:"' + name + '"')}&type=track&limit=10&offset=${offset}`, { fastFail: true });
       for(const t of (r?.tracks?.items || [])){
         if(!t.id || exclude.has(t.id)) continue;
         if(!(t.artists||[]).some(x => normName(x.name) === normName(name))) continue;
@@ -1199,7 +1229,18 @@ async function seedArtistTracks(names, exclude){
                    artists:t.artists.map(x => ({ id:x.id, name:x.name })) });
         exclude.add(t.id);
       }
-    }catch(e){ if(/rate-limiting/.test(e.message)) break; }
+    }catch(e){
+      if(/rate-limiting/.test(e.message)){
+        if(waits < 2){
+          waits++;
+          vibeLog('Spotify breather — waiting 20s to keep pulling seed artists…');
+          await sleep(20000);
+          i--; continue;
+        }
+        rateTrimmed = true;
+        break;
+      }
+    }
     await sleep(110);
   }
   return out;
@@ -1225,7 +1266,7 @@ async function findNew(concepts, ranked, want){
   // 0b. the artists that define the vibe
   if(aiRead && aiRead.artists && aiRead.artists.length){
     vibeLog('Pulling from the artists that define this vibe…');
-    for(const t of await seedArtistTracks(aiRead.artists, ex)) takeNew(t);
+    for(const t of await seedArtistTracks(aiRead.artists, ex, want >= 40)) takeNew(t);
   }
 
   for(let c = 0; c < concepts.length; c++){
@@ -3280,6 +3321,7 @@ async function buildInner(){
      defining artists. Its words feed the same scoring engine; nothing about
      the gates changes. If it's unreachable, the plain pipeline carries on. */
   aiRead = null;
+  rateTrimmed = false;
   vibeLog('Interpreting the vibe…');
   $('#aiStatus').textContent = 'Interpreting…';
   aiRead = await interpretVibe(text);
@@ -3510,6 +3552,7 @@ async function buildInner(){
       if(bandRej) why.push(`${bandRej} weaker matches`);
       if(unchecked) why.push(`${unchecked} still unchecked`);
       if(why.length) msg += ` Filtered out: ${why.join(', ')}.`;
+      if(rateTrimmed) msg += ` Spotify's rate limit trimmed this build — rebuild to keep growing it (progress is saved).`;
     }
     if(pinnedGenre && current.seq.length < n){
       msg += ` Locked to ${pretty(pinnedGenre)} — that's every verified ${pretty(pinnedGenre)} song matching this feel. Nothing outside the genre was added to pad it.`;
