@@ -173,7 +173,7 @@ details[open] summary{margin-bottom:12px}
 <div class="wrap">
 
 <header class="mast">
-  <div class="stamp">Reads a feeling · returns a running order · build 63</div>
+  <div class="stamp">Reads a feeling · returns a running order · build 64</div>
   <h1>Set<em>list</em></h1>
   <p>Describe a moment in plain words. Setlist reads it as sound — tempo, energy, brightness, air — and finds the songs in your library that already live there.</p>
 </header>
@@ -929,7 +929,7 @@ async function catalogSearch(concept, want){
     const est = { ...GENRE_VEC[g], est:true, bpm:null };
     for(const d of DIMS) if(est[d] === undefined) est[d] = null;
     const jump = Math.floor(Math.random() * 25) * 10;   // vary results between builds
-    for(let page = 0; page < 4; page++){
+    for(let page = 0; page < 7; page++){
       const q = encodeURIComponent(`genre:"${g}"`);
       let r;
       try{ r = await sp(`/search?q=${q}&type=track&limit=10&offset=${jump + page*10}`); }
@@ -1141,7 +1141,7 @@ async function seedArtistTracks(names, exclude){
   const out = [];
   for(const name of names){
     try{
-      const r = await sp(`/search?q=${encodeURIComponent('artist:"' + name + '"')}&type=track&limit=10`);
+      const r = await sp(`/search?q=${encodeURIComponent('artist:"' + name + '"')}&type=track&limit=10&offset=${Math.random()<0.5?0:10}`);
       for(const t of (r?.tracks?.items || [])){
         if(!t.id || exclude.has(t.id)) continue;
         if(!(t.artists||[]).some(x => normName(x.name) === normName(name))) continue;
@@ -3350,7 +3350,20 @@ async function buildInner(){
     wantMine = quotas[0];
 
     const avail = streams.reduce((a, st) => a + st.length, 0);
-    const unchecked = [...rMine, ...rFresh].filter(r => r.gf === null && r.cf[0] >= HEAD_MIN).length;
+    /* classify every above-floor candidate by the first gate that stopped it,
+       so a short playlist explains itself precisely */
+    let unchecked = 0, lockRej = 0, langRej = 0, bandRej = 0;
+    for(const r of [...rMine, ...rFresh]){
+      if(r.cf[0] < HEAD_MIN || !shapeOk(r.cf)) continue;
+      if(r.raw < best - QUALITY_BAND){ bandRej++; continue; }
+      if(effPin){
+        const g = inGenre(r.t, effPin);
+        if(g === null){ unchecked++; continue; }
+        if(g === false || !soundsLike(effPin, r.t.f)){ lockRej++; continue; }
+      }else if(r.gf === null){ unchecked++; continue; }
+      else if(r.gf < gFloor){ lockRej++; continue; }
+      if(r.raw < langBar(r.t, best)) langRej++;
+    }
     let picked = interleave(streams, weights, n, 2, quotas);
 
     /* Short is fine — padding is not. Widen in order of how likely you are to
@@ -3360,8 +3373,8 @@ async function buildInner(){
          2. more from the artists that already cleared the vibe (proven to fit,
             genres already cached) — NOT your global top artists, who might be pop
          3. similar songs from outside your library                            */
-    if(source === 'lib' && picked.length < n){
-      vibeLog(`${picked.length} of ${n} from your library — checking songs you've heard…`);
+    if(source !== 'new' && picked.length < n){
+      vibeLog(`${picked.length} of ${n} — checking songs you've heard…`);
       await loadHeard();
       const exclude = new Set([...library.map(t => t.id), ...picked.map(t => t.id)]);
       const hPool = await featuresFor(Object.values(heard || {}).filter(t => !exclude.has(t.id)));
@@ -3407,7 +3420,12 @@ async function buildInner(){
     msg += '.';
     if(current.seq.length < n){
       msg += ` That's every song that truly fits.`;
-      if(unchecked) msg += ` ${unchecked} more were skipped because their artist's genre isn't known yet — build again and they'll be checked.`;
+      const why = [];
+      if(lockRej) why.push(`${lockRej} wrong genre`);
+      if(langRej) why.push(`${langRej} language`);
+      if(bandRej) why.push(`${bandRej} weaker matches`);
+      if(unchecked) why.push(`${unchecked} still unchecked`);
+      if(why.length) msg += ` Filtered out: ${why.join(', ')}.`;
     }
     if(pinnedGenre && current.seq.length < n){
       msg += ` Locked to ${pretty(pinnedGenre)} — that's every verified ${pretty(pinnedGenre)} song matching this feel. Nothing outside the genre was added to pad it.`;
